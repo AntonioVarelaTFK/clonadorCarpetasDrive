@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        background-color: #f4f4f4;
+        margin: 0;
+        padding: 0;
+        height: 100vh;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+      }
+
+      .contenedor {
+        background-color: white;
+        padding: 30px;
+        border-radius: 8px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+        width: 100%;
+        max-width: 460px;
+      }
+
+      h2 {
+        text-align: center;
+        margin-bottom: 20px;
+      }
+
+      label {
+        font-weight: bold;
+        margin-top: 15px;
+        display: block;
+      }
+
+      input, button {
+        width: 100%;
+        padding: 10px;
+        margin-top: 5px;
+        margin-bottom: 15px;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+      }
+
+      button {
+        background-color: #4285F4;
+        color: white;
+        font-weight: bold;
+        cursor: pointer;
+        transition: background-color 0.3s ease;
+      }
+
+      button:hover {
+        background-color: #3367D6;
+      }
+
+      .spinner {
+        display: none;
+        margin: 20px auto;
+        border: 5px solid #f3f3f3;
+        border-top: 5px solid #4285F4;
+        border-radius: 50%;
+        width: 40px;
+        height: 40px;
+        animation: girar 1s linear infinite;
+      }
+
+      @keyframes girar {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+      }
+
+      #resultado {
+        margin-top: 20px;
+        font-size: 0.95em;
+        text-align: left;
+      }
+
+      .nota {
+        font-size: 0.9em;
+        color: #666;
+        text-align: center;
+        margin-top: -10px;
+        margin-bottom: 15px;
+      }
+
+      .mensaje-ok {
+        background-color: #e8f5e9;
+        color: #1b5e20;
+        padding: 10px;
+        border-left: 4px solid #2e7d32;
+        border-radius: 4px;
+      }
+
+      .mensaje-error {
+        background-color: #ffebee;
+        color: #b71c1c;
+        padding: 10px;
+        border-left: 4px solid #c62828;
+        border-radius: 4px;
+      }
+
+      .mensaje-aviso {
+        background-color: #fff8e1;
+        color: #e65100;
+        padding: 10px;
+        border-left: 4px solid #f9a825;
+        border-radius: 4px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="contenedor">
+      <h2>Copia desde carpeta compartida</h2>
+
+      <label for="idCarpeta">ID de la carpeta compartida:</label>
+      <input type="text" id="idCarpeta" placeholder="Ej: 1a2b3c4d5e...">
+
+      <label for="nombreDestino">Nombre de la carpeta destino:</label>
+      <input type="text" id="nombreDestino" placeholder="Ej: Copia IA 2ºESO...">
+
+      <p class="nota">La copia se reanudará automáticamente si ya existe contenido.<br>No se sobrescriben ni se duplican archivos.</p>
+
+      <button onclick="enviar()">📁 Ejecutar copia</button>
+      <button onclick="verificar()">🔍 Verificar integridad</button>
+      <button onclick="limpiar()">🧹 Limpiar destino</button>
+
+      <div class="spinner" id="spinner"></div>
+      <div id="resultado"></div>
+    </div>
+
+    <script>
+      function enviar() {
+        const datos = {
+          idCarpeta: document.getElementById("idCarpeta").value.trim(),
+          nombreDestino: document.getElementById("nombreDestino").value.trim(),
+          modo: "auto"
+        };
+
+        if (!datos.idCarpeta) {
+          document.getElementById("resultado").innerHTML = "<div class='mensaje-error'>Por favor, introduce un ID de carpeta.</div>";
+          return;
+        }
+
+        document.getElementById("spinner").style.display = "block";
+        document.getElementById("resultado").innerHTML = "Procesando copia...";
+
+        google.script.run
+          .withSuccessHandler(function (res) {
+            document.getElementById("spinner").style.display = "none";
+
+            document.getElementById("resultado").innerHTML = `
+              <div class="mensaje-ok">${res.mensaje}</div>
+              <div style="text-align: center; margin-top: 20px;">
+                <button onclick="window.open('https://drive.google.com/drive/folders/${res.idDestino}', '_blank')" style="margin-top:10px">
+                  Abrir carpeta en Drive
+                </button><br><br>
+                <button onclick="window.open('${res.urlRegistro}', '_blank')" style="margin-top:5px">
+                  Ver archivo de progreso
+                </button>
+              </div>
+            `;
+          })
+          .iniciarCopia(datos);
+      }
+
+      function verificar() {
+        const datos = {
+          idCarpeta: document.getElementById("idCarpeta").value.trim(),
+          nombreDestino: document.getElementById("nombreDestino").value.trim()
+        };
+
+        if (!datos.idCarpeta || !datos.nombreDestino) {
+          document.getElementById("resultado").innerHTML = "<div class='mensaje-error'>Introduce el ID de carpeta y nombre destino para verificar.</div>";
+          return;
+        }
+
+        document.getElementById("spinner").style.display = "block";
+        document.getElementById("resultado").textContent = "Verificando integridad...";
+
+        google.script.run
+          .withSuccessHandler(function (res) {
+            document.getElementById("spinner").style.display = "none";
+
+            let claseResultado = res.includes("✅") ? "mensaje-ok" :
+                                 res.includes("❌") ? "mensaje-error" :
+                                 "mensaje-aviso";
+
+            document.getElementById("resultado").innerHTML = `<div class="${claseResultado}">${res}</div>`;
+          })
+          .verificarIntegridad(datos);
+      }
+
+      function limpiar() {
+        const datos = {
+          idCarpeta: document.getElementById("idCarpeta").value.trim(),
+          nombreDestino: document.getElementById("nombreDestino").value.trim()
+        };
+
+        if (!datos.idCarpeta || !datos.nombreDestino) {
+          document.getElementById("resultado").innerHTML = "<div class='mensaje-error'>Introduce el ID de carpeta y nombre destino para limpiar.</div>";
+          return;
+        }
+
+        if (!confirm("⚠ ¿Estás seguro de que deseas eliminar los elementos sobrantes del destino?")) {
+          return;
+        }
+
+        document.getElementById("spinner").style.display = "block";
+        document.getElementById("resultado").textContent = "Limpiando destino...";
+
+        google.script.run
+          .withSuccessHandler(function (res) {
+            document.getElementById("spinner").style.display = "none";
+
+            let claseResultado = res.includes("✅") ? "mensaje-ok" :
+                                 res.includes("❌") ? "mensaje-error" :
+                                 "mensaje-aviso";
+
+            document.getElementById("resultado").innerHTML = `<div class="${claseResultado}">${res}</div>`;
+          })
+          .limpiarDestino(datos);
+      }
+    </script>
+  </body>
+</html>
