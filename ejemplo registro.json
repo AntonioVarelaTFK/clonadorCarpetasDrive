@@ -1,0 +1,85 @@
+{
+    "__errores": [],
+    "__pesados": [],
+    "__raiz": "Mis clases",
+    "/Mis clases": {
+      "archivos": {
+        "myProject.zip": {
+          "id": "10c6cbXgrmpU8GrsI9Gm-7HkCpZk50KnL",
+          "size": 922,
+          "modificado": 1746265478627
+        }
+      },
+      "carpetas": {
+        "CyR": "1aNUP6tMcGZDXSgN-9zm7V24pRDcinqWo",
+        "DIG": "148vlRgp27atyz2JjiDHpjxn5CB2fCJhC",
+        "ej1": "1ydufDt78jw2UR5olCBVA7aTJcDSp27Cs"
+      }
+    },
+    "/Mis clases/CyR": {
+      "archivos": {
+        "ESO3A- clones.sb3": {
+          "id": "1MgtQdRpRDYaaEbdoTWq-PNYxZ3unozrz",
+          "size": 64910,
+          "modificado": 1733818107724
+        },
+        "ESO3A- clones (1).sb3": {
+          "id": "1GAI9pYYVoda5VVZhTwX6yDnfb-OAbgGH",
+          "size": 36625,
+          "modificado": 1733818338712
+        },
+        "ESO3A- clones (2).sb3": {
+          "id": "1RayQ7hAHjESgoXM68i7LUey5wYhSVp4p",
+          "size": 64907,
+          "modificado": 1733818673807
+        },
+        "test": {
+          "id": "1cHKaZDnOuUBKIU1sPOXkPcniYdJL5QXz2AIKEpjJRyE",
+          "size": 1024,
+          "modificado": 1746270665586
+        }
+      },
+      "carpetas": {}
+    },
+    "/Mis clases/DIG": {
+      "archivos": {
+        "4ESOC_Tuto2_-_Get_Started_2024_12_12_11_57_19.zip": {
+          "id": "1buheoCyoC2Atv-mR8Yx2SxpGRXGlPGXy",
+          "size": 5412822,
+          "modificado": 1734004647129
+        },
+        "4esoC_Tutorial1_2024_12_11_13_19_03.zip": {
+          "id": "1M2FjTDet2xYgzfWVgbTXBH69YMNr7xCa",
+          "size": 5412414,
+          "modificado": 1733923174209
+        },
+        "4ESOB_Tuto1_2024_12_11_08_49_27.zip": {
+          "id": "1mjKRzKuNUaN74u8aYn3MJnDn4ExhgwKE",
+          "size": 5212149,
+          "modificado": 1733907006447
+        }
+      },
+      "carpetas": {}
+    },
+    "/Mis clases/ej1": {
+      "archivos": {
+        "style.css": {
+          "id": "1FsFSnyFTF-lrUTRmI_2SjNSAWIaGBew9",
+          "size": 70,
+          "modificado": 1733302294186
+        },
+        "sketch.js": {
+          "id": "1Sp4REXztrz2Vo-FrlQ3ndEJO2kw7XMf6",
+          "size": 128,
+          "modificado": 1733302294176
+        },
+        "index.html": {
+          "id": "1EZ8f23ZVeDA5aZHv4JZJqbRKCfjtUfuq",
+          "size": 418,
+          "modificado": 1733302294154
+        }
+      },
+      "carpetas": {}
+    },
+    "__fecha": "2025-05-03 13:13:21"
+  }
