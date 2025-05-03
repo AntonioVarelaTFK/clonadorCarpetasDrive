@@ -43,6 +43,16 @@ Para más detalle del proceso, mírate el "manual de uso.pdf". Tienes un paso a 
 4. Pulsa **Ejecutar copia** para lanzar una primera copia.
 5. Usa los botones **Verificar integridad** o **Limpiar destino** según lo necesites.
 
+## 📊 Comparativa de soluciones de copia de seguridad en Google Drive
+
+| Solución                  | Ventajas principales                                                                                      | Inconvenientes                                                                                      | Precio      | Requiere instalación |
+|---------------------------|-----------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------|-------------|-----------------------|
+| **clonadorCarpetasDrive** | - Gratuito y personalizable<br>- Registro detallado y verificación<br>- Limpieza opcional del destino     | - No programable por defecto<br>- Limitado por el tiempo de ejecución de Apps Script                | Gratuito    | No                   |
+| **Kernel GDrive Backup**  | - Soporte multiusuario<br>- Migración incremental<br>- Filtros por fecha y carpetas                       | - De pago<br>- Requiere configuración técnica                                                       | De pago     | Sí                   |
+| **Backupify**             | - Copias completas de Google Workspace<br>- Gestión en la nube<br>- Restauración eficiente                | - Precio elevado<br>- Orientado a empresas                                                          | De pago     | No                   |
+| **SpinBackup**            | - Copia automatizada<br>- Restauración granular<br>- Protección frente a ransomware                        | - De pago<br>- Configuración avanzada                                                               | De pago     | No                   |
+| **Rclone**                | - Muy flexible<br>- Compatible con múltiples nubes<br>- Automatizable y con cifrado opcional               | - Requiere uso por línea de comandos<br>- Instalación y configuración complejas                     | Gratuito    | Sí                   |
+
 ## 📂 Estructura del proyecto
 
 - `Code.gs`: lógica principal del script.
