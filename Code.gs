@@ -509,3 +509,196 @@ function construirRegistroDesdeDestino(origen, destino, registro, rutaBase) {
   }
 }
 
+/**
+ * Comprime una carpeta destino previamente verificada en bloques de hasta 100 MB.
+ * Los archivos ZIP se almacenan en una carpeta /Backups ZIP dentro del mismo Drive.
+ * Se genera un log en la carpeta de informes con los archivos incluidos en cada ZIP.
+ */
+function comprimirCarpetaDestino(nombreDestino) {
+  const carpetaDestino = DriveApp.getFoldersByName(nombreDestino);
+  if (!carpetaDestino.hasNext()) throw new Error(`No se encuentra la carpeta destino: ${nombreDestino}`);
+  const carpeta = carpetaDestino.next();
+
+  const parent = carpeta.getParents().hasNext() ? carpeta.getParents().next() : DriveApp.getRootFolder();
+  const backupsZipFolder = parent.getFoldersByName("Backups ZIP").hasNext()
+    ? parent.getFoldersByName("Backups ZIP").next()
+    : parent.createFolder("Backups ZIP");
+
+  const fecha = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd_HH-mm");
+  const baseNombreZip = `backup_${nombreDestino.replace(/[^\w\d-_]/g, '_')}_${fecha}`;
+
+  const archivos = obtenerTodosLosArchivosConRuta(carpeta, "");
+  const BLOQUE_MB = 100;
+  const BLOQUE_BYTES = BLOQUE_MB * 1024 * 1024;
+
+  // Paso previo: estimar número de bloques
+  let total = 0;
+  let bloquesEstimados = 0;
+  for (const obj of archivos) {
+    const size = obj.file.getSize();
+    total += size;
+    if (total > BLOQUE_BYTES) {
+      bloquesEstimados++;
+      total = size;
+    }
+  }
+  if (total > 0) bloquesEstimados++; // último bloque
+
+  // Ahora hacer compresión real
+  let bloque = [];
+  let numZip = 1;
+  let zipsCreados = [];
+  let resumenLog = [];
+  let advertencias = [];
+  total = 0;
+
+  for (const obj of archivos) {
+    const size = obj.file.getSize();
+    if (total + size > BLOQUE_BYTES && bloque.length > 0) {
+      const nombreZip = `${baseNombreZip}_part${numZip}_of_${bloquesEstimados}.zip`;
+      const zip = crearZipDesdeArchivos(bloque, nombreZip, backupsZipFolder);
+      zipsCreados.push(zip.getUrl());
+      resumenLog.push(`ZIP ${numZip} (${bloque.length} archivos)`);
+      bloque = [];
+      total = 0;
+      numZip++;
+    }
+    bloque.push(obj);
+    total += size;
+  }
+
+  if (bloque.length > 0) {
+    const nombreZip = `${baseNombreZip}_part${numZip}_of_${bloquesEstimados}.zip`;
+    const zip = crearZipDesdeArchivos(bloque, nombreZip, backupsZipFolder, advertencias);
+    zipsCreados.push(zip.getUrl());
+    resumenLog.push(`ZIP ${numZip} (${bloque.length} archivos)`);
+  }
+
+  const log = {
+    destino: nombreDestino,
+    fecha: fecha,
+    zips: zipsCreados,
+    resumen: resumenLog,
+    advertencias: advertencias
+  };
+
+  const nombreLog = `log_zip_${baseNombreZip}.json`;
+  const logFile = guardarRegistro(log, nombreLog);
+
+  return {
+    mensaje: `✅ Se han creado ${zipsCreados.length} archivo(s) ZIP con estructura.`,
+    zips: zipsCreados,
+    urlLog: logFile.getUrl(),
+    carpetaZipsUrl: backupsZipFolder.getUrl()
+  };
+}
+
+
+/**
+ * Recorre recursivamente una carpeta y devuelve todos los archivos
+ */
+function obtenerTodosLosArchivosConRuta(folder, rutaBase) {
+  let archivos = [];
+  const nombreActual = folder.getName();
+  const rutaActual = rutaBase ? `${rutaBase}/${nombreActual}` : nombreActual;
+
+  const files = folder.getFiles();
+  while (files.hasNext()) {
+    const f = files.next();
+    archivos.push({ file: f, ruta: `${rutaActual}/${f.getName()}` });
+  }
+
+  const subcarpetas = folder.getFolders();
+  while (subcarpetas.hasNext()) {
+    const sub = subcarpetas.next();
+    archivos = archivos.concat(obtenerTodosLosArchivosConRuta(sub, rutaActual));
+  }
+
+  return archivos;
+}
+
+/**
+ * Recibe una lista de archivos y los comprime usando Utilities.zip
+ */
+function crearZipDesdeArchivos(archivos, nombreZip, destinoFolder, advertencias) {
+  const blobs = archivos.map(obj => {
+    const file = obj.file;
+    const ruta = obj.ruta;
+    const mimeType = file.getMimeType();
+    const fileId = file.getId();
+
+    try {
+      if (mimeType === MimeType.GOOGLE_DOCS || mimeType === MimeType.GOOGLE_SHEETS || mimeType === MimeType.GOOGLE_SLIDES) {
+        const exportMime =
+          mimeType === MimeType.GOOGLE_DOCS ? MimeType.MICROSOFT_WORD :
+          mimeType === MimeType.GOOGLE_SHEETS ? MimeType.MICROSOFT_EXCEL :
+          MimeType.MICROSOFT_POWERPOINT;
+
+        const extension =
+          mimeType === MimeType.GOOGLE_DOCS ? ".docx" :
+          mimeType === MimeType.GOOGLE_SHEETS ? ".xlsx" :
+          ".pptx";
+
+        const url = `https://www.googleapis.com/drive/v2/files/${fileId}/export?mimeType=${encodeURIComponent(exportMime)}`;
+        const token = ScriptApp.getOAuthToken();
+        const response = UrlFetchApp.fetch(url, {
+          headers: { Authorization: `Bearer ${token}` },
+          muteHttpExceptions: true
+        });
+
+        if (response.getResponseCode() !== 200) {
+          throw new Error(`Código ${response.getResponseCode()}: ${response.getContentText()}`);
+        }
+
+        return Utilities.newBlob(response.getBlob().getBytes(), exportMime, ruta.replace(/\.\w+$/, extension));
+
+      } else if (mimeType === MimeType.GOOGLE_FORMS) {
+        const url = file.getUrl();
+        const acceso = `[InternetShortcut]\nURL=${url}`;
+        const blob = Utilities.newBlob(acceso, MimeType.PLAIN_TEXT, ruta.replace(/\.gform$/, ".url"));
+        advertencias.push(`⚠ Formulario incluido como acceso directo: ${ruta}`);
+        return blob;
+
+      } else {
+        return file.getBlob().setName(ruta);
+      }
+
+    } catch (e) {
+      Logger.log(`⚠ Error al exportar archivo ${file.getName()}: ${e.message}`);
+      advertencias.push(`⚠ Error al exportar archivo ${ruta}. Error: ${e.message}. Mimetype: ${mimeType}. Añadido como blob original.`);
+      return file.getBlob().setName(ruta);
+    }
+  });
+
+  const zipBlob = Utilities.zip(blobs, nombreZip);
+  return destinoFolder.createFile(zipBlob);
+}
+
+
+/**
+ * Calcula el número aproximado de ficheros zip a generar
+ */
+function calcularEstimacionCompresion(nombreDestino) {
+  const carpetaDestino = DriveApp.getFoldersByName(nombreDestino);
+  if (!carpetaDestino.hasNext()) throw new Error(`No se encuentra la carpeta destino: ${nombreDestino}`);
+  const carpeta = carpetaDestino.next();
+
+  const archivos = obtenerTodosLosArchivosConRuta(carpeta, "");
+  const BLOQUE_MB = 100;
+  const BLOQUE_BYTES = BLOQUE_MB * 1024 * 1024;
+
+  let totalBytes = 0;
+  for (const obj of archivos) {
+    totalBytes += obj.file.getSize();
+  }
+
+  const numZips = Math.ceil(totalBytes / BLOQUE_BYTES);
+  const gbTotales = (totalBytes / (1024 ** 3)).toFixed(2);
+
+  return {
+    mensaje: `📦 Estimado: ${gbTotales} GB en ${numZips} archivo(s) ZIP de hasta ${BLOQUE_MB} MB.`,
+    totalGB: gbTotales,
+    partes: numZips
+  };
+}
+

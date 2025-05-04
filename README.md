@@ -1,53 +1,66 @@
-# 🧭 Copiador de carpetas compartidas en Google Drive
+# 🧭 Clonador Carpetas Drive
 
-Este script de Google Apps Script permite copiar de forma recursiva el contenido de una carpeta compartida de Drive en tu unidad personal, manteniendo un registro de los elementos copiados y permitiendo reanudar la copia en caso de interrupción.
+Este script de Google Apps Script permite copiar de forma recursiva el contenido de una carpeta compartida de Drive en tu unidad personal, manteniendo un registro de los elementos copiados, permitiendo reanudar la copia en caso de interrupción (aún en pruebas) y añadiendo opciones de verificación, limpieza y compresión.
 
-Te pongo en antecedentes:
-Tenemos una carpeta en Google Drive que contiene archivos y carpetas y más archivos y más carpetas…. Y quiero hacer una copia en otro drive de otra cuenta que no pertenece a mi dominio. 
-Hasta ahora o buscas soluciones de terceros, o haces un zip, lo descargas, lo subes al destino y lo descomprimes allí, una foto finish.
+## 📘 Contexto
 
-Pero y ¿si compartimos con el correo externo la carpeta que queremos salvaguardar? Esto nos daría acceso directo a la carpeta del drive origen desde el drive destino, … hasta que dejen de compartirla con nuestra cuenta.
-Realmente no tenemos la carpeta en nuestro drive de destino y las alternativas para hacerse una copia son las que hemos comentado antes, si la carpeta no contiene mucha estructura es accesible hacerlo a mano pero ¿y si no es el caso?
-
-Con esta solución podemos crear una carpeta copia de la original compartida en una ubicación de su propio drive y elaborar un informe del proceso de copia, también haremos que si el script se para o se interrumpe, podamos pedirle que continúe por donde se quedó.
-
+Tenemos una carpeta en Google Drive que contiene archivos y carpetas y más archivos y más carpetas… y queremos hacer una copia en otro Drive de otra cuenta que no pertenece a nuestro dominio.  
+Hasta ahora las soluciones pasaban por herramientas externas, descargar y volver a subir, o hacerlo manualmente. Esta herramienta permite automatizar ese proceso **sin depender de software de terceros** y con una interfaz web sencilla.
 
 ## 🔧 Funcionalidades principales
 
-- Copia recursiva de todos los archivos y subcarpetas.
-- Detección de elementos ya copiados para evitar duplicados.
-- Posibilidad de continuar una copia interrumpida sin repetir el trabajo anterior.
-- Verificación de integridad: compara el origen con el destino y detecta eliminaciones o modificaciones.
-- Limpieza opcional del destino: elimina archivos o carpetas que ya no están en el origen.
-- Registro de cada copia (JSON) almacenado en Drive.
-- Interfaz sencilla a través de formulario HTML.
+- ✅ Copia recursiva de todos los archivos y subcarpetas.
+- 🔄 Reanudación automática si se interrumpe la copia.
+- 🔍 Verificación de integridad entre origen y destino.
+- 🧹 Limpieza opcional del destino (elimina lo que ya no está en el origen).
+- 🗂️ Registro JSON de cada operación (copia y compresión).
+- 💾 Compresión en ZIP o múltiples ZIPs de hasta 100 MB cada uno:
+  - Mantiene la estructura de carpetas en el fichero zip.
+  - Convierte documentos de Google a formatos editables:
+    - Google Docs → `.docx`
+    - Google Sheets → `.xlsx`
+    - Google Slides → `.pptx`
+    - Google Forms no son exportables, pero se incluye un acceso directo (`.url`) a su ubicación copiada.
+- 📊 Estimación previa del tamaño total y número de ZIPs antes de comprimir.
+- 🖥️ Interfaz clara, en HTML con botones de acción.
 
 ## ▶ Cómo instalarlo
 
-1. Crea un nuevo proyecto en Google Apps Script desde [script.google.com](https://script.google.com/) y copia los archivos `Code.gs` y `FormularioDestino.html`.
-2. Despliega el proyecto como aplicación web (con permisos de edición).
-3. Introduce el ID de la carpeta compartida y un nombre para la carpeta destino.
-4. Usa los botones para lanzar la copia, verificar cambios o limpiar el destino.
-
-Para más detalle del proceso, mírate el "manual de uso.pdf". Tienes un paso a paso de los códigos, la instalación y ejemplos de uso.
+1. Crea un nuevo proyecto en Google Apps Script desde [script.google.com](https://script.google.com/).
+2. Asígnale un nombre.
+3. Copia los archivos `Code.gs` y `FormularioDestino.html` de este proyecto.
+4. Prueba la implementación desde **Implementar** > **Implementación de prueba**.
+5. Cuando estés satisfecho con los resultados, crea una nueva implementación desde **Implementar** > **Nueva implementación**.
+6. Copia y guarda la **url** creada.
 
 > ⚠️ Requiere autorización para acceder a tu Google Drive.
 
 ## ✅ Instrucciones de uso
 
-![alt text](interfaz.png)
+![Interfaz](interfaz.png)
 
 1. Abre el enlace de la app publicada.
-2. Introduce el **ID de la carpeta origen** (también puede ser una carpeta compartida).
+2. Introduce el **ID de la carpeta origen**.
 3. Indica el **nombre que tendrá la copia** en tu Drive.
-4. Pulsa **Ejecutar copia** para lanzar una primera copia.
-5. Usa los botones **Verificar integridad** o **Limpiar destino** según lo necesites.
+4. Pulsa **Ejecutar copia** para iniciar la clonación.
+5. Usa **Verificar integridad** o **Limpiar destino** según lo necesites.
+6. Tras verificar correctamente, se habilitará la opción de **💾 Comprimir en ZIP(s)**.
+
+> ⚠️ Requiere autorización para acceder a tu Google Drive.
+
+
+## 📦 ¿Qué pasa con los archivos ZIP?
+
+- Se guardan en una carpeta automática llamada **Backups ZIP**, junto a la carpeta destino.
+- Los ZIP mantienen la estructura original y se nombran como `backup_<nombre>_part1_of_3.zip`, etc.
+- Si un archivo no se puede convertir, se incluye en su formato por defecto, que suele ser una conversión a **pdf**.
+- Se genera un archivo de log detallado con la información de cada ZIP.
 
 ## 📊 Comparativa de soluciones de copia de seguridad en Google Drive
 
 | Solución                  | Ventajas principales                                                                                      | Inconvenientes                                                                                      | Precio      | Requiere instalación |
 |---------------------------|-----------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------|-------------|-----------------------|
-| **clonadorCarpetasDrive** | - Gratuito y personalizable<br>- Registro detallado y verificación<br>- Limpieza opcional del destino     | - No programable por defecto<br>- Limitado por el tiempo de ejecución de Apps Script                | Gratuito    | No                   |
+| **Clonador Carpetas Drive** | - Gratuito y personalizable<br>- Registro detallado y verificación<br>- Compresión con estructura de carpetas<br>- Conversión de documentos Google | - Limitado por el tiempo de ejecución de Apps Script<br>- No permite programar copias periódicas   | Gratuito    | No                   |
 | **Kernel GDrive Backup**  | - Soporte multiusuario<br>- Migración incremental<br>- Filtros por fecha y carpetas                       | - De pago<br>- Requiere configuración técnica                                                       | De pago     | Sí                   |
 | **Backupify**             | - Copias completas de Google Workspace<br>- Gestión en la nube<br>- Restauración eficiente                | - Precio elevado<br>- Orientado a empresas                                                          | De pago     | No                   |
 | **SpinBackup**            | - Copia automatizada<br>- Restauración granular<br>- Protección frente a ransomware                        | - De pago<br>- Configuración avanzada                                                               | De pago     | No                   |
@@ -58,14 +71,15 @@ Para más detalle del proceso, mírate el "manual de uso.pdf". Tienes un paso a 
 - `Code.gs`: lógica principal del script.
 - `FormularioDestino.html`: interfaz de usuario.
 - `README.md`: este archivo.
-- `ejemplo registro.json`: Un ejemplo del registro generado tras la ejecución de la copia
-- `interfaz.png`: Una captura de pantalla de la interfaz HTML (La has visto arriba)
-- `manual de uso.pdf`: Una descripción más detallada del código, proceso de despliegue y ejemplos de uso
+- `ejemplo registro.json`: ejemplo del progreso de copia.
+- `ejemplo log backup zip.json`: ejemplo de log de compresión.
+- `interfaz.png`: captura de pantalla de la interfaz.
+- `manual de uso.pdf`: guía detallada de instalación y uso.
 
 ## 📝 Licencia
 
-Este proyecto se distribuye bajo la licencia MIT.
-Puedes modificarlo, adaptarlo y reutilizarlo libremente, citando al autor original si lo deseas.
+Este proyecto se distribuye bajo la licencia MIT.  
+Puedes modificarlo, adaptarlo y reutilizarlo libremente citando al autor original si lo deseas.
 
 ## ✍️ Autor
 

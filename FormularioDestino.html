@@ -108,6 +108,14 @@
         border-left: 4px solid #f9a825;
         border-radius: 4px;
       }
+
+      .mensaje-info {
+        background-color: #e3f2fd;
+        color: #0d47a1;
+        padding: 10px;
+        border-left: 4px solid #2196f3;
+        border-radius: 4px;
+      }
     </style>
   </head>
   <body>
@@ -187,7 +195,28 @@
                                  res.includes("❌") ? "mensaje-error" :
                                  "mensaje-aviso";
 
-            document.getElementById("resultado").innerHTML = `<div class="${claseResultado}">${res}</div>`;
+            let html = `<div class="${claseResultado}">${res}</div>`;
+
+            if (res.includes("✅")) {
+              // Llamamos a calcular estimación
+              const nombreDestino = document.getElementById("nombreDestino").value.trim();
+              google.script.run
+                .withSuccessHandler(function (estimado) {
+                  html += `<div class="mensaje-info" style="margin-top:10px;">${estimado.mensaje}</div>`;
+                  html += `
+                    <div style="text-align:center; margin-top: 15px;">
+                      <button onclick="comprimir()" style="background-color:#6d4c41;">
+                        💾 Comprimir carpeta destino en ZIP(s)
+                      </button>
+                    </div>
+                  `;
+                  document.getElementById("resultado").innerHTML = html;
+                })
+                .calcularEstimacionCompresion(nombreDestino);
+            } else {
+              document.getElementById("resultado").innerHTML = html;
+            }
+
           })
           .verificarIntegridad(datos);
       }
@@ -222,6 +251,60 @@
           })
           .limpiarDestino(datos);
       }
+
+      function comprimir() {
+        const nombreDestino = document.getElementById("nombreDestino").value.trim();
+
+        if (!nombreDestino) {
+          document.getElementById("resultado").innerHTML = "<div class='mensaje-error'>Falta el nombre de la carpeta destino.</div>";
+          return;
+        }
+
+        const datos = {
+          idCarpeta: document.getElementById("idCarpeta").value.trim(),
+          nombreDestino: nombreDestino
+        };
+
+        document.getElementById("spinner").style.display = "block";
+        document.getElementById("resultado").innerHTML = "Comprimiendo carpeta...";
+
+        // 1º: encontrar el ID de la carpeta de destino
+        google.script.run.withSuccessHandler(function (res) {
+          if (!res || !res.idDestino) {
+            document.getElementById("spinner").style.display = "none";
+            document.getElementById("resultado").innerHTML = "<div class='mensaje-error'>No se pudo localizar la carpeta destino para comprimir.</div>";
+            return;
+          }
+
+          // 2º: llamar a comprimirCarpetaEnZips con el nombre y el ID
+          google.script.run
+            .withSuccessHandler(function (resZip) {
+              document.getElementById("spinner").style.display = "none";
+              const claseResultado = resZip.mensaje.includes("✅") ? "mensaje-ok" :
+                                    resZip.mensaje.includes("❌") ? "mensaje-error" : "mensaje-aviso";
+              
+              let html = `<div class="${claseResultado}">${resZip.mensaje}</div>`;
+
+              if (resZip.zips?.length > 0) {
+                html += `
+                  <div style="text-align: center; margin-top: 20px;">
+                    <button onclick="window.open('${resZip.carpetaZipsUrl}', '_blank')" style="margin-top:10px">
+                      Abrir carpeta con ZIPs
+                    </button><br><br>
+                    <button onclick="window.open('${resZip.urlLog}', '_blank')" style="margin-top:5px">
+                      Ver log de compresión
+                    </button>
+                  </div>
+                `;
+              }
+              document.getElementById("resultado").innerHTML = html;
+
+            })
+            .comprimirCarpetaDestino(nombreDestino);
+
+        }).iniciarCopia({ idCarpeta: datos.idCarpeta, nombreDestino: datos.nombreDestino, modo: "auto" });
+      }
+
     </script>
   </body>
 </html>
