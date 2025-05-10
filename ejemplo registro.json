@@ -1,85 +1,120 @@
+
 {
-    "__errores": [],
-    "__pesados": [],
-    "__raiz": "Mis clases",
-    "/Mis clases": {
-      "archivos": {
-        "myProject.zip": {
-          "id": "10c6cbXgrmpU8GrsI9Gm-7HkCpZk50KnL",
-          "size": 922,
-          "modificado": 1746265478627
-        }
-      },
-      "carpetas": {
-        "CyR": "1aNUP6tMcGZDXSgN-9zm7V24pRDcinqWo",
-        "DIG": "148vlRgp27atyz2JjiDHpjxn5CB2fCJhC",
-        "ej1": "1ydufDt78jw2UR5olCBVA7aTJcDSp27Cs"
+  "__fecha": "2025-05-10T20:09:00.733Z",
+  "__estado_proceso": "completado_ok",
+  "__progreso": {
+    "totalTareas": 1,
+    "tareasCompletadas": 1,
+    "erroresEnLote": 0,
+    "mensajeActual": "Proceso finalizado. Tareas procesadas: 1 de 1."
+  },
+  "__pendientes": [
+    {
+      "tipo": "copiarArchivo",
+      "nombre": "Copia de Leeme",
+      "idArchivoOrigen": "1UBazzoxGMoA5AKpOEx8JHmJK-X6EYZ57vfibOYiBL_E",
+      "rutaOrigenAbsoluta": "/Mis clases/ej1/Copia de Leeme",
+      "rutaPadreDestinoLogKey": "/Mis clases/ej1",
+      "sizeOrigen": 1024,
+      "modificadoOrigen": 1746907544086,
+      "intentos": 0,
+      "estado": "completada_ok"
+    }
+  ],
+  "__errores": [],
+  "__pesados": [],
+  "__raiz": "Mis clases",
+  "/Mis clases": {
+    "archivos": {
+      "myProject.zip": {
+        "id": "1ta6EcKxcFJcrC_aV8jEhIMlMsSWv12da",
+        "size": 922,
+        "modificado": 1746265478627
       }
     },
-    "/Mis clases/CyR": {
-      "archivos": {
-        "ESO3A- clones.sb3": {
-          "id": "1MgtQdRpRDYaaEbdoTWq-PNYxZ3unozrz",
-          "size": 64910,
-          "modificado": 1733818107724
-        },
-        "ESO3A- clones (1).sb3": {
-          "id": "1GAI9pYYVoda5VVZhTwX6yDnfb-OAbgGH",
-          "size": 36625,
-          "modificado": 1733818338712
-        },
-        "ESO3A- clones (2).sb3": {
-          "id": "1RayQ7hAHjESgoXM68i7LUey5wYhSVp4p",
-          "size": 64907,
-          "modificado": 1733818673807
-        },
-        "test": {
-          "id": "1cHKaZDnOuUBKIU1sPOXkPcniYdJL5QXz2AIKEpjJRyE",
-          "size": 1024,
-          "modificado": 1746270665586
-        }
-      },
-      "carpetas": {}
+    "carpetas": {
+      "DIG": "1d139MmdDyz0FvhLXUA82LV0mCEZzlMeN",
+      "ej1": "1GvVqgz14-lMqy66-QH1eghmruAXrRgAB",
+      "CyR": "1KzXL9M8xaKsw2aqj8rjlWI4QHvUiicGD"
     },
-    "/Mis clases/DIG": {
-      "archivos": {
-        "4ESOC_Tuto2_-_Get_Started_2024_12_12_11_57_19.zip": {
-          "id": "1buheoCyoC2Atv-mR8Yx2SxpGRXGlPGXy",
-          "size": 5412822,
-          "modificado": 1734004647129
-        },
-        "4esoC_Tutorial1_2024_12_11_13_19_03.zip": {
-          "id": "1M2FjTDet2xYgzfWVgbTXBH69YMNr7xCa",
-          "size": 5412414,
-          "modificado": 1733923174209
-        },
-        "4ESOB_Tuto1_2024_12_11_08_49_27.zip": {
-          "id": "1mjKRzKuNUaN74u8aYn3MJnDn4ExhgwKE",
-          "size": 5212149,
-          "modificado": 1733907006447
-        }
+    "id_destino_folder": "1IRzX5Kt8djnQSvHzXTdjPNhGx8lf6y4N"
+  },
+  "/Mis clases/DIG": {
+    "archivos": {
+      "4ESOC_Tuto2_-_Get_Started_2024_12_12_11_57_19.zip": {
+        "id": "1nJiG61FxUN5HWYUw8mJnbjybdbwwHFek",
+        "size": 5412822,
+        "modificado": 1734004647129
       },
-      "carpetas": {}
-    },
-    "/Mis clases/ej1": {
-      "archivos": {
-        "style.css": {
-          "id": "1FsFSnyFTF-lrUTRmI_2SjNSAWIaGBew9",
-          "size": 70,
-          "modificado": 1733302294186
-        },
-        "sketch.js": {
-          "id": "1Sp4REXztrz2Vo-FrlQ3ndEJO2kw7XMf6",
-          "size": 128,
-          "modificado": 1733302294176
-        },
-        "index.html": {
-          "id": "1EZ8f23ZVeDA5aZHv4JZJqbRKCfjtUfuq",
-          "size": 418,
-          "modificado": 1733302294154
-        }
+      "4esoC_Tutorial1_2024_12_11_13_19_03.zip": {
+        "id": "14ZCfJHKDWMD3l3ZozIDmyu1ZJjRSQL--",
+        "size": 5412414,
+        "modificado": 1733923174209
       },
-      "carpetas": {}
+      "4ESOB_Tuto1_2024_12_11_08_49_27.zip": {
+        "id": "1SCmqiLQUQOxmp9ZYxr_Rgji6-IDHtYJF",
+        "size": 5212149,
+        "modificado": 1733907006447
+      }
     },
-    "__fecha": "2025-05-03 13:13:21"
+    "carpetas": {},
+    "id_destino_folder": "1d139MmdDyz0FvhLXUA82LV0mCEZzlMeN"
+  },
+  "/Mis clases/ej1": {
+    "archivos": {
+      "prueba sheets": {
+        "id": "12vpw0MSUYC2VJWbJMrpl63D10pUzSJtF311k7I-v3B4",
+        "size": 1024,
+        "modificado": 1746899065404
+      },
+      "Leeme": {
+        "id": "1CL4w--3JzTjS916mCdVAYnDldGyUi7kYRBvuifiyx10",
+        "size": 1024,
+        "modificado": 1746371387979
+      },
+      "style.css": {
+        "id": "1R5G6yJz5cEz2Tv4NGf2obQ1DiB2bubMr",
+        "size": 70,
+        "modificado": 1733302294186
+      },
+      "sketch.js": {
+        "id": "1hQBncIm5ohNwi86P8du_iSLft_90ox8X",
+        "size": 128,
+        "modificado": 1733302294176
+      },
+      "index.html": {
+        "id": "1_ma7NL7lVNl9kaz3DhHiTx213TTVhAF2",
+        "size": 418,
+        "modificado": 1733302294154
+      },
+      "Copia de prueba sheets": {
+        "id": "1fD7Zl4bSZhAsYuTWsXoC0di3kJzB-bDAG6ucKzkzCBc",
+        "size": 1024,
+        "modificado": 1746906693807
+      },
+      "Copia de Leeme": {
+        "id": "18XVSe0QGYUsqMxXgsZgS8vyMXb7d6_QKMETsnZ-E1pc",
+        "size": 1024,
+        "modificado": 1746907544086
+      }
+    },
+    "carpetas": {},
+    "id_destino_folder": "1GvVqgz14-lMqy66-QH1eghmruAXrRgAB"
+  },
+  "/Mis clases/CyR": {
+    "archivos": {
+      "ESO3A- clones (1).sb3": {
+        "id": "1omI-iEUfMCm8dQHyBt860Wmgt1woj0Eo",
+        "size": 36625,
+        "modificado": 1733818338712
+      },
+      "ESO3A- clones.sb3": {
+        "id": "1rMwFBTucVfqJ8NW1CG9vQT2Qu1ed7I_6",
+        "size": 64910,
+        "modificado": 1733818107724
+      }
+    },
+    "carpetas": {},
+    "id_destino_folder": "1KzXL9M8xaKsw2aqj8rjlWI4QHvUiicGD"
   }
+}

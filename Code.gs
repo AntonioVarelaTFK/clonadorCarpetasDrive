@@ -1,224 +1,881 @@
 const NOMBRE_CARPETA_INFORMES = "Informes de copia Drive";
+const LOTE_TAMAÑO = 7; // Procesar 7 tareas por ejecución del trigger (puedes ajustar esto)
+const TRIGGER_DELAY_MS = 50 * 1000; // 50 segundos
+const MAX_INTENTOS_POR_TAREA = 3;
+
+// Claves para PropertiesService
+const PS_KEYS = {
+  BATCH_ACTIVE: 'BATCH_PROCESS_ACTIVE',
+  LOG_FILENAME: 'BATCH_LOG_FILENAME',
+  TASK_INDEX: 'BATCH_CURRENT_TASK_INDEX',
+  TRIGGER_ID: 'BATCH_CURRENT_TRIGGER_ID',
+  DESTINATION_FOLDER_ID: 'BATCH_DESTINATION_FOLDER_ID', // ID de la carpeta destino raíz
+  SOURCE_FOLDER_ID: 'BATCH_SOURCE_FOLDER_ID' // ID de la carpeta origen raíz
+};
 
 function doGet() {
   return HtmlService.createHtmlOutputFromFile("FormularioDestino")
-    .setTitle("Copia desde carpeta compartida");
+    .setTitle("Copia desde carpeta compartida por Lotes");
 }
 
-function iniciarCopia(datos) {
+// ==========================================================================
+// FUNCION PRINCIPAL INVOCADA DESDE HTML PARA INICIAR EL PROCESO
+// ==========================================================================
+function iniciarCopiaPorLotes(datos) {
   try {
+    // Limpiar cualquier proceso de lote anterior para esta sesión de usuario
+    limpiarPropiedadesBatch();
+    borrarTriggerActualPorNombre('procesarLoteTareas_triggered'); // Limpia triggers antiguos
+
     const idOrigen = datos.idCarpeta.trim();
-    let nombreDestino = datos.nombreDestino.trim() || "Copia desde compartido";
-    let modo = datos.modo?.trim() || "auto";
+    let nombreDestino = datos.nombreDestino.trim() || "Copia por lotes desde compartido";
+    // El modo "forzar nuevo" o "continuar" se manejará dentro de la lógica de planificación.
+
     const carpetaOrigen = DriveApp.getFolderById(idOrigen);
     const nombreRaizOrigen = carpetaOrigen.getName();
 
     let carpetaDestino;
-    let mensajeEstado = "";
-    const carpetas = DriveApp.getFoldersByName(nombreDestino);
+    let mensajeEstadoGlobal = "";
+    const carpetasDestinoExistentes = DriveApp.getFoldersByName(nombreDestino);
 
-    let registro;
-
-    if (carpetas.hasNext()) {
-      carpetaDestino = carpetas.next();
-
-      if (modo === "auto") {
-        if (carpetaDestino.getFiles().hasNext() || carpetaDestino.getFolders().hasNext()) {
-          const registroExistente = cargarRegistro(nombreDestino);
-          if (Object.keys(registroExistente).length === 0) {
-            modo = "continuar";
-            registro = generarRegistroDesdeDestino(carpetaOrigen, carpetaDestino);
-            mensajeEstado = `⚠ Carpeta "${nombreDestino}" tenía contenido pero sin registro previo. Se ha generado uno desde el contenido actual.`;
-          } else {
-            modo = "continuar";
-          }
-        } else {
-          modo = "nuevo";
-        }
+    if (carpetasDestinoExistentes.hasNext()) {
+      carpetaDestino = carpetasDestinoExistentes.next();
+      // Si hay más con el mismo nombre, usamos la primera y advertimos (o podrías tener una lógica más compleja)
+      if (carpetasDestinoExistentes.hasNext()) {
+        Logger.log(`ADVERTENCIA: Múltiples carpetas destino encontradas con el nombre "${nombreDestino}". Usando la primera: ${carpetaDestino.getId()}`);
       }
-
-      if (modo === "nuevo" && (carpetaDestino.getFiles().hasNext() || carpetaDestino.getFolders().hasNext())) {
-        modo = "continuar";
-        mensajeEstado = `⚠ Carpeta "${nombreDestino}" ya tenía contenido. Cambiado a modo CONTINUAR.`;
-      } else if (!mensajeEstado) {
-        mensajeEstado = `Usando carpeta existente: "${nombreDestino}".`;
-      }
-
+      mensajeEstadoGlobal = `Usando carpeta destino existente: "${nombreDestino}".`;
     } else {
       carpetaDestino = DriveApp.createFolder(nombreDestino);
-      mensajeEstado = `Carpeta creada: "${nombreDestino}".`;
+      mensajeEstadoGlobal = `Carpeta destino creada: "${nombreDestino}".`;
+    }
+    
+    const idCarpetaDestino = carpetaDestino.getId();
+    PropertiesService.getUserProperties().setProperty(PS_KEYS.DESTINATION_FOLDER_ID, idCarpetaDestino);
+    PropertiesService.getUserProperties().setProperty(PS_KEYS.SOURCE_FOLDER_ID, idOrigen);
+
+    // Cargar el registro más reciente si existe para esta carpeta destino
+    let dataRegistro = cargarRegistro(nombreDestino);
+    let registro =  dataRegistro.registroJson;
+    ////////////////////
+    Logger.log(`Registro cargado para "${nombreDestino}". ¿Tiene __raiz?: ${registro.hasOwnProperty('__raiz')}. Contenido de __progreso.mensajeActual: ${registro.__progreso ? registro.__progreso.mensajeActual : 'N/A'}`);
+
+    // Determinar si el registro cargado es un placeholder de "no encontrado" o "error al cargar"
+    const esRegistroPlaceholder = registro.__progreso && registro.__progreso.mensajeActual &&
+                                  (registro.__progreso.mensajeActual.includes("No se encontró registro previo.") ||
+                                   registro.__progreso.mensajeActual.includes("Error al cargar registro."));
+
+    if (Object.keys(registro).length === 0 || esRegistroPlaceholder) {
+      // Si está completamente vacío o es el placeholder de error/no encontrado de cargarRegistro
+      Logger.log(`Registro para "${nombreDestino}" está vacío o es un placeholder. Inicializando nuevo registro.`);
+      registro = {
+          // __raiz se establece más abajo de forma garantizada
+          __fecha: null, // Se establecerá más abajo
+          __estado_proceso: "planificando",
+          __progreso: { totalTareas: 0, tareasCompletadas: 0, erroresEnLote: 0, mensajeActual: "Iniciando planificación..." },
+          __pendientes: [],
+          __errores: [],
+          __pesados: []
+      };
+    } else {
+        Logger.log(`Usando registro existente para "${nombreDestino}". Limpiando para replanificación.`);
+        // Limpiar pendientes y progreso para una nueva planificación, pero mantener la estructura de carpetas/archivos ya conocida.
+        registro.__pendientes = []; // Limpiar siempre para una nueva planificación desde UI
+        registro.__progreso = { 
+            totalTareas: 0, 
+            tareasCompletadas: 0, // Reseteamos para la nueva planificación
+            erroresEnLote: 0, 
+            mensajeActual: "Re-planificando tareas desde registro existente..." 
+        };
     }
 
-    registro = modo === "continuar" && typeof registro === "undefined" ? cargarRegistro(nombreDestino) : (registro || {});
+    // Asegurar SIEMPRE que __raiz y __fecha estén actualizados para la ejecución actual.
+    // Esto también maneja el caso donde un registro antiguo pudiera no tener __raiz.
+    registro.__raiz = nombreRaizOrigen;
+    registro.__fecha = new Date().toISOString();
+    registro.__estado_proceso = "planificando"; // Siempre estamos planificando aquí
+    Logger.log(`__raiz para "${nombreDestino}" establecida/actualizada a: "${registro.__raiz}"`);
 
-    const nuevos = copiarRecursivoConProgreso(carpetaOrigen, carpetaDestino, registro, "", nombreRaizOrigen);
+    // --- Fase de Planificación ---
+    let listaTareas = [];
+    // generarListaDeTareas usará el 'registro' con __raiz ya asegurado.
+    // También usará 'registro' para ver la estructura de destino ya conocida si existe.
+    generarListaDeTareas(carpetaOrigen, carpetaDestino, nombreRaizOrigen, registro, listaTareas);
+    
+    registro.__pendientes = listaTareas;
+    registro.__progreso.totalTareas = listaTareas.length;
+    registro.__progreso.mensajeActual = `Planificación completa. ${listaTareas.length} tareas pendientes.`;
 
-    let mensajeFinal = nuevos === 0
-      ? "✅ Todo ya estaba copiado. No se han hecho cambios."
-      : `🟡 Se han copiado ${nuevos} elementos nuevos.`;
+    if (listaTareas.length === 0) {
+      registro.__estado_proceso = "completado_ok";
+      registro.__progreso.mensajeActual = "No hay tareas pendientes. Todo parece estar sincronizado.";
+      const nombreArchivoRegistroFinal = generarNombreRegistro(nombreDestino);
+      guardarRegistro(registro, nombreArchivoRegistroFinal);
+      PropertiesService.getUserProperties().setProperty(PS_KEYS.LOG_FILENAME, nombreArchivoRegistroFinal);
+      limpiarPropiedadesBatch(); // No hay nada que hacer por lotes
 
-    const nombreArchivoRegistro = generarNombreRegistro(nombreDestino);
-    registro.__fecha = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm:ss");
-    const archivoRegistro = guardarRegistro(registro, nombreArchivoRegistro);
-
-    let advertencias = "";
-    if (registro.__pesados?.length > 0) {
-      advertencias += "⚠ Archivos grandes detectados:<br>" + registro.__pesados.map(p => "- " + p).join("<br>") + "<br><br>";
+      return {
+        mensaje: `✅ ${registro.__progreso.mensajeActual}`,
+        idDestino: idCarpetaDestino,
+        nombreDestino: nombreDestino,
+        urlRegistro: DriveApp.getFileById(guardarRegistro(registro, nombreArchivoRegistroFinal).getId()).getUrl(), // Asegúrate que guardarRegistro devuelve el File
+        procesoPorLotesIniciado: false
+      };
     }
-    if (registro.__errores?.length > 0) {
-      advertencias += "❌ Errores durante la copia:<br>" + registro.__errores.map(e => "- " + e).join("<br>") + "<br><br>";
-    }
 
-    let mensajeHTML = "";
-    mensajeHTML += `<div>📁 ${nombreDestino}</div>`;
-    mensajeHTML += `<div>${mensajeEstado}<br>${mensajeFinal}</div>`;
+    registro.__estado_proceso = "en_progreso";
+    const nombreArchivoRegistro = generarNombreRegistro(nombreDestino); // Tu función existente
+    const archivoRegistroGuardado = guardarRegistro(registro, nombreArchivoRegistro); // Asumimos que guardarRegistro devuelve el objeto File
+  
 
-    if (advertencias.trim()) {
-      mensajeHTML += `<div style="margin-top: 10px">${advertencias}</div>`;
-    }
+    // Configurar PropertiesService para el proceso por lotes
+    const userProps = PropertiesService.getUserProperties();
+    userProps.setProperties({
+      [PS_KEYS.BATCH_ACTIVE]: 'true',
+      [PS_KEYS.LOG_FILENAME]: nombreArchivoRegistro,
+      [PS_KEYS.TASK_INDEX]: '0'
+    });
+
+    // Crear el primer trigger
+    crearSiguienteTrigger('procesarLoteTareas_triggered');
 
     return {
-      mensaje: mensajeHTML,
-      idDestino: carpetaDestino.getId(),
+      mensaje: `🚀 Proceso de copia por lotes iniciado para "${nombreDestino}". ${listaTareas.length} tareas en cola. El proceso continuará en segundo plano.`,
+      idDestino: idCarpetaDestino,
       nombreDestino: nombreDestino,
-      urlRegistro: archivoRegistro.getUrl()
+      urlRegistro: archivoRegistroGuardado ? archivoRegistroGuardado.getUrl() : null,
+      procesoPorLotesIniciado: true
     };
 
   } catch (e) {
-    Logger.log("Error general en iniciarCopia: " + e.message);
-    return { mensaje: "❌ Ocurrió un error inesperado. Revisa los registros." };
+    Logger.log("Error general en iniciarCopiaPorLotes: " + e.stack);
+    // Limpiar propiedades en caso de error en la inicialización
+    limpiarPropiedadesBatch();
+    borrarTriggerActualPorNombre('procesarLoteTareas_triggered');
+    return { 
+        mensaje: `❌ Ocurrió un error inesperado al iniciar: ${e.message}. Revisa los registros del script.`,
+        procesoPorLotesIniciado: false
+    };
+  }
+}
+
+// ==========================================================================
+// FUNCIONES PARA EL PROCESAMIENTO POR LOTES (TRIGGERS) 
+// ==========================================================================
+
+/**
+ * Función que es llamada directamente por el trigger.
+ * Actúa como un envoltorio seguro para la lógica principal del lote.
+ */
+function procesarLoteTareas_triggered() {
+  const lock = LockService.getUserLock();
+  if (lock.tryLock(30000)) { // Intentar obtener un bloqueo durante 30s
+    try {
+      Logger.log("Procesando lote de tareas (triggered)...");
+      procesarLoteTareas();
+    } catch (e) {
+      Logger.log(`Error crítico en procesarLoteTareas_triggered: ${e.stack}`);
+      const userProps = PropertiesService.getUserProperties();
+      const logFileName = userProps.getProperty(PS_KEYS.LOG_FILENAME);
+      if (logFileName) {
+        try {
+            let registro = JSON.parse(obtenerOCrearCarpeta(NOMBRE_CARPETA_INFORMES).getFilesByName(logFileName).next().getBlob().getDataAsString());
+            registro.__estado_proceso = "error_critico";
+            registro.__errores.push({timestamp: new Date().toISOString(), tarea: "CRITICO", mensaje: `Error en trigger: ${e.message}`});
+            registro.__progreso.mensajeActual = "Error crítico en el proceso por lotes.";
+            guardarRegistro(registro, logFileName); // Asumiendo que guardarRegistro maneja File object o crea uno nuevo
+        } catch (logError) {
+            Logger.log(`Error al intentar guardar el error crítico en el log: ${logError.stack}`);
+        }
+      }
+      borrarTriggerActualPorNombre('procesarLoteTareas_triggered');
+      limpiarPropiedadesBatch();
+    } finally {
+      lock.releaseLock();
+    }
+  } else {
+    Logger.log("No se pudo obtener el bloqueo para procesarLoteTareas_triggered. Otro proceso podría estar en ejecución.");
   }
 }
 
 
-function copiarRecursivoConProgreso(origen, destino, registro, rutaBase, raiz) {
-  const nombreActual = origen.getName();
-  const rutaActual = rutaBase ? `${rutaBase}/${nombreActual}` : `/${nombreActual}`;
-
-  if (!registro[rutaActual]) registro[rutaActual] = { archivos: {}, carpetas: {} };
-  if (!registro.__errores) registro.__errores = [];
-  if (!registro.__pesados) registro.__pesados = [];
-  if (!registro.__raiz) registro.__raiz = raiz;
-
-  let nuevosCopiados = 0;
-
-  const archivosDestino = destino.getFiles();
-  const mapaArchivosDestino = {};
-  while (archivosDestino.hasNext()) {
-    const archivo = archivosDestino.next();
-    mapaArchivosDestino[archivo.getName()] = archivo;
+/**
+ * Lógica principal para procesar un lote de tareas. VERSIÓN ACTUALIZADA CON EJECUCIÓN DE TAREAS.
+ */
+function procesarLoteTareas() {
+  const userProps = PropertiesService.getUserProperties();
+  if (userProps.getProperty(PS_KEYS.BATCH_ACTIVE) !== 'true') {
+    Logger.log("Proceso por lotes no activo. Deteniendo.");
+    borrarTriggerActualPorNombre('procesarLoteTareas_triggered');
+    return;
   }
 
-  const archivosOrigen = origen.getFiles();
-  while (archivosOrigen.hasNext()) {
-    const archivo = archivosOrigen.next();
-    const nombre = archivo.getName();
-    const size = archivo.getSize();
-    const modificado = archivo.getLastUpdated().getTime();
+  const logFileName = userProps.getProperty(PS_KEYS.LOG_FILENAME);
+  // Este es el índice de la primera tarea que este lote intentará procesar.
+  let globalTaskPointer = parseInt(userProps.getProperty(PS_KEYS.TASK_INDEX) || '0');
+  const idCarpetaDestinoRaiz = userProps.getProperty(PS_KEYS.DESTINATION_FOLDER_ID); // Usado si rutaPadreDestinoLogKey es la raíz
 
-    const yaRegistrado = registro[rutaActual].archivos[nombre];
-    const mismoContenido = yaRegistrado &&
-                           yaRegistrado.size === size &&
-                           yaRegistrado.modificado === modificado;
-
-    const existeEnDestino = !!mapaArchivosDestino[nombre]; 
-
-    // 🔄 Si está registrado pero ha sido eliminado en destino, debe recopiarse
-    const necesitaCopiar = !mismoContenido || !existeEnDestino;
-
-    if (necesitaCopiar) {
-      if (size > 100 * 1024 * 1024) {
-        registro.__pesados.push(`${rutaActual}/${nombre} (${Math.round(size / 1024 / 1024)} MB)`);
-      }
-      try {
-        if (existeEnDestino) {
-          mapaArchivosDestino[nombre].setTrashed(true);
-        }
-        const copia = archivo.makeCopy(nombre, destino);
-        registro[rutaActual].archivos[nombre] = {
-          id: copia.getId(),
-          size: size,
-          modificado: modificado
-        };
-        nuevosCopiados++;
-      } catch (e) {
-        const msg = `Error al copiar archivo "${nombre}" en ${rutaActual}: ${e.message}`;
-        Logger.log(msg);
-        registro.__errores.push(msg);
-      }
+  if (!logFileName || !idCarpetaDestinoRaiz) {
+    Logger.log("Faltan propiedades esenciales (LOG_FILENAME o DESTINATION_FOLDER_ID). Deteniendo proceso.");
+    limpiarPropiedadesBatch();
+    borrarTriggerActualPorNombre('procesarLoteTareas_triggered');
+    return;
+  }
+  
+  let registro;
+  let archivoLog; // DriveApp.File object
+  try {
+    const carpetaInformes = obtenerOCrearCarpeta(NOMBRE_CARPETA_INFORMES);
+    const iteradorArchivos = carpetaInformes.getFilesByName(logFileName);
+    if (!iteradorArchivos.hasNext()) {
+        Logger.log(`Archivo de log ${logFileName} no encontrado. Deteniendo.`);
+        limpiarPropiedadesBatch();
+        borrarTriggerActualPorNombre('procesarLoteTareas_triggered');
+        return;
     }
+    archivoLog = iteradorArchivos.next();
+    registro = JSON.parse(archivoLog.getBlob().getDataAsString());
+  } catch (e) {
+    Logger.log(`Error al cargar el archivo de log ${logFileName}: ${e.stack}. Deteniendo.`);
+    limpiarPropiedadesBatch();
+    borrarTriggerActualPorNombre('procesarLoteTareas_triggered');
+    return;
   }
 
-  const subcarpetasDestino = destino.getFolders();
-  const mapaCarpetasDestino = {};
-  while (subcarpetasDestino.hasNext()) {
-    const c = subcarpetasDestino.next();
-    mapaCarpetasDestino[c.getName()] = c.getId();
+  // Si el estado ya es final, no hacer nada más y limpiar.
+  if (registro.__estado_proceso === "completado_ok" || registro.__estado_proceso === "completado_con_errores" || registro.__estado_proceso === "error_critico") {
+    Logger.log(`El proceso ya está marcado como '${registro.__estado_proceso}'. Limpiando y saliendo.`);
+    limpiarPropiedadesBatch();
+    borrarTriggerActualPorNombre('procesarLoteTareas_triggered');
+    return;
+  }
+  
+  if (!registro.__pendientes || globalTaskPointer >= registro.__pendientes.length) {
+    Logger.log("No hay más tareas pendientes o el índice es inválido. Marcando como completado.");
+    registro.__estado_proceso = registro.__errores?.length > 0 ? "completado_con_errores" : "completado_ok";
+    registro.__progreso.mensajeActual = "Todas las tareas han sido procesadas.";
+    registro.__fecha = new Date().toISOString();
+    // Guardar estado final (usando guardarRegistro para consistencia)
+    guardarRegistro(registro, logFileName); 
+    
+    limpiarPropiedadesBatch();
+    borrarTriggerActualPorNombre('procesarLoteTareas_triggered');
+    return;
   }
 
-  const subcarpetasOrigen = origen.getFolders();
-  while (subcarpetasOrigen.hasNext()) {
-    const sub = subcarpetasOrigen.next();
-    const nombreSub = sub.getName();
+  registro.__progreso.erroresEnLote = 0; // Resetear contador de errores del lote actual
 
-    const idDestino = registro[rutaActual].carpetas[nombreSub];
-    const existeSubEnDestino = idDestino && mapaCarpetasDestino[nombreSub]; 
+  // Procesar hasta LOTE_TAMAÑO tareas o hasta que una tarea falle y necesite reintento sin avanzar el puntero.
+  for (let i = 0; i < LOTE_TAMAÑO && globalTaskPointer < registro.__pendientes.length; i++) {
+    // NO incrementamos i aquí, solo si la tarea se "resuelve" (éxito o fallo permanente)
+    // o si la tarea actual falla pero podemos pasar a la siguiente del lote.
+    // La variable 'i' cuenta cuántas tareas del LOTE_TAMAÑO hemos *intentado*.
+    // globalTaskPointer es el que realmente importa para el progreso general.
 
-    if (!idDestino || !existeSubEnDestino) { // 🔄 incluir creación si ha sido eliminada
-      try {
-        const nuevaSub = destino.createFolder(nombreSub);
-        registro[rutaActual].carpetas[nombreSub] = nuevaSub.getId();
-        nuevosCopiados++;
-      } catch (e) {
-        const msg = `Error al crear carpeta "${nombreSub}" en ${rutaActual}: ${e.message}`;
-        Logger.log(msg);
-        registro.__errores.push(msg);
-        continue;
-      }
-    }
+    const tarea = registro.__pendientes[globalTaskPointer];
+    // Podríamos añadir un estado a la tarea misma, ej. tarea.estado = 'procesando'
+    
+    registro.__progreso.mensajeActual = `Procesando tarea ${globalTaskPointer + 1}/${registro.__progreso.totalTareas}: ${tarea.tipo} - ${tarea.nombre}`;
+    Logger.log(registro.__progreso.mensajeActual);
+
+    let tareaResueltaEnEsteIntento = false; // Indica si la tarea actual avanzó (éxito o fallo max)
 
     try {
-      const subDestino = DriveApp.getFolderById(registro[rutaActual].carpetas[nombreSub]);
-      nuevosCopiados += copiarRecursivoConProgreso(sub, subDestino, registro, rutaActual, raiz);
+      if (tarea.tipo === "crearCarpeta") {
+        ejecutarTareaCrearCarpeta(tarea, registro, idCarpetaDestinoRaiz);
+      } else if (tarea.tipo === "copiarArchivo") {
+        ejecutarTareaCopiarArchivo(tarea, registro, idCarpetaDestinoRaiz);
+      } else {
+        throw new Error(`Tipo de tarea desconocido: ${tarea.tipo}`);
+      }
+      
+      // Si llegamos aquí, la tarea fue exitosa
+      registro.__progreso.tareasCompletadas++;
+      tarea.estado = "completada_ok"; // Marcar estado en la tarea misma (opcional)
+      Logger.log(`Tarea '${tarea.nombre}' completada exitosamente.`);
+      tareaResueltaEnEsteIntento = true;
+
     } catch (e) {
-      const msg = `Error al continuar con subcarpeta "${nombreSub}" en ${rutaActual}: ${e.message}`;
-      Logger.log(msg);
-      registro.__errores.push(msg);
+      const mensajeError = `Error procesando tarea '${tarea.nombre}' (Intento ${ (tarea.intentos || 0) + 1}): ${e.message}`;
+      Logger.log(mensajeError);
+      Logger.log(e.stack); // Loguear el stacktrace completo para depuración
+      
+      registro.__errores.push({timestamp: new Date().toISOString(), tarea: tarea, mensaje: e.message});
+      registro.__progreso.erroresEnLote++;
+      tarea.intentos = (tarea.intentos || 0) + 1;
+
+      if (tarea.intentos >= MAX_INTENTOS_POR_TAREA) {
+        registro.__progreso.mensajeActual = `Tarea '${tarea.nombre}' falló ${MAX_INTENTOS_POR_TAREA} veces. Se omite permanentemente.`;
+        Logger.log(registro.__progreso.mensajeActual);
+        // Contar como "completada" para que el progreso general avance y el proceso pueda terminar.
+        registro.__progreso.tareasCompletadas++; 
+        tarea.estado = "fallida_permanente"; // Marcar estado en la tarea misma (opcional)
+        tareaResueltaEnEsteIntento = true; // Se considera resuelta (aunque fallida)
+      } else {
+        registro.__progreso.mensajeActual = `Tarea '${tarea.nombre}' falló, se reintentará.`;
+        Logger.log(registro.__progreso.mensajeActual);
+        // No se considera resuelta, globalTaskPointer NO avanzará.
+        // El lote actual se interrumpe aquí para esta tarea, para darle prioridad en el siguiente trigger.
+        tareaResueltaEnEsteIntento = false; 
+        // Rompemos el bucle for para que este trigger guarde el estado actual y
+        // el siguiente trigger reintente esta misma tarea primero.
+        break; 
+      }
+    }
+
+    if (tareaResueltaEnEsteIntento) {
+      globalTaskPointer++; // Avanzar al siguiente índice de tarea solo si la actual se resolvió
+    }
+  } // Fin del bucle for que procesa el LOTE_TAMAÑO
+  
+  userProps.setProperty(PS_KEYS.TASK_INDEX, globalTaskPointer.toString());
+  registro.__fecha = new Date().toISOString();
+
+  try {
+    // Usar guardarRegistro para asegurar consistencia si esa función maneja la creación/actualización de File object
+    // Si tu guardarRegistro espera el objeto JSON y el nombre, y devuelve el File object:
+    const archivoLogActualizado = guardarRegistro(registro, logFileName); 
+    if (!archivoLogActualizado) { // guardarRegistro debería devolver el objeto File o null/error
+        throw new Error("guardarRegistro no devolvió un objeto de archivo válido.");
+    }
+    // Si necesitas el contenido actualizado para algo más inmediatamente:
+    // archivoLog.setContent(Utilities.newBlob(JSON.stringify(registro, null, 2), MimeType.PLAIN_TEXT, logFileName).getDataAsString());
+  } catch(e) {
+      Logger.log(`FALLO CRITICO: No se pudo guardar el archivo de log ${logFileName}. ${e.stack}`);
+      limpiarPropiedadesBatch();
+      borrarTriggerActualPorNombre('procesarLoteTareas_triggered');
+      return; 
+  }
+
+  if (globalTaskPointer < registro.__pendientes.length && registro.__progreso.tareasCompletadas < registro.__progreso.totalTareas) {
+    crearSiguienteTrigger('procesarLoteTareas_triggered');
+    Logger.log(`Lote procesado. Puntero global de tareas en: ${globalTaskPointer}. Próximo trigger programado.`);
+  } else {
+    Logger.log("Todas las tareas han sido procesadas o han alcanzado el límite de reintentos. Limpiando.");
+    registro.__estado_proceso = registro.__errores?.length > 0 ? "completado_con_errores" : "completado_ok";
+    if (registro.__progreso.tareasCompletadas >= registro.__progreso.totalTareas) {
+         registro.__progreso.mensajeActual = `Proceso finalizado. Tareas procesadas: ${registro.__progreso.tareasCompletadas} de ${registro.__progreso.totalTareas}.`;
+    } else {
+         registro.__progreso.mensajeActual = `Proceso finalizado con tareas pendientes no resueltas. Procesadas: ${registro.__progreso.tareasCompletadas} de ${registro.__progreso.totalTareas}.`;
+    }
+    registro.__fecha = new Date().toISOString();
+    guardarRegistro(registro, logFileName);
+    
+    limpiarPropiedadesBatch();
+    borrarTriggerActualPorNombre('procesarLoteTareas_triggered');
+    Logger.log("Proceso por lotes finalizado y triggers eliminados.");
+  }
+}
+
+
+// ==========================================================================
+// FUNCIONES AUXILIARES PARA EJECUTAR TAREAS INDIVIDUALES
+// ==========================================================================
+
+/**
+ * Ejecuta una tarea de tipo "crearCarpeta".
+ * Actualiza el objeto 'registro' con el ID de la carpeta creada.
+ * @param {Object} tarea Objeto de la tarea a ejecutar.
+ * @param {Object} registro Objeto de log principal (se modifica directamente).
+ * @param {String} idCarpetaDestinoRaiz ID de la carpeta destino raíz (por si la ruta padre es la raíz).
+ */
+function ejecutarTareaCrearCarpeta(tarea, registro, idCarpetaDestinoRaiz) {
+  Logger.log(`Ejecutando crearCarpeta: ${tarea.nombre} en ${tarea.rutaPadreDestinoLogKey}`);
+  let idCarpetaPadreDestino;
+
+  if (registro[tarea.rutaPadreDestinoLogKey] && registro[tarea.rutaPadreDestinoLogKey].id_destino_folder) {
+    idCarpetaPadreDestino = registro[tarea.rutaPadreDestinoLogKey].id_destino_folder;
+  } else {
+    // Esto podría pasar si la ruta padre es la raíz misma y no tiene una entrada '.id_destino_folder' separada,
+    // o si hay un error en la lógica de planificación/registro.
+    // Comprobar si la ruta padre es la raíz del log.
+    if (tarea.rutaPadreDestinoLogKey === `/${registro.__raiz}`) {
+        idCarpetaPadreDestino = idCarpetaDestinoRaiz;
+    } else {
+        throw new Error(`No se pudo encontrar el ID de la carpeta destino padre '${tarea.rutaPadreDestinoLogKey}' en el registro.`);
+    }
+  }
+  
+  const carpetaPadreDestino = DriveApp.getFolderById(idCarpetaPadreDestino);
+  
+  // Verificar si ya existe una carpeta con ese nombre (podría haber sido creada por otro proceso o manualmente)
+  const carpetasExistentes = carpetaPadreDestino.getFoldersByName(tarea.nombre);
+  let nuevaCarpeta;
+  if (carpetasExistentes.hasNext()) {
+      nuevaCarpeta = carpetasExistentes.next();
+      Logger.log(`Carpeta '${tarea.nombre}' ya existía en destino. Usando existente.`);
+  } else {
+      nuevaCarpeta = carpetaPadreDestino.createFolder(tarea.nombre);
+      Logger.log(`Carpeta '${tarea.nombre}' creada con ID: ${nuevaCarpeta.getId()}`);
+  }
+  
+  const idNuevaCarpeta = nuevaCarpeta.getId();
+
+  // Actualizar el registro:
+  // 1. En la entrada del padre, registrar el ID de esta nueva subcarpeta.
+  if (!registro[tarea.rutaPadreDestinoLogKey].carpetas) {
+    registro[tarea.rutaPadreDestinoLogKey].carpetas = {};
+  }
+  registro[tarea.rutaPadreDestinoLogKey].carpetas[tarea.nombre] = idNuevaCarpeta;
+
+  // 2. En la entrada propia de la nueva carpeta (rutaOrigenAbsoluta), registrar su ID de destino.
+  if (!registro[tarea.rutaOrigenAbsoluta]) {
+    registro[tarea.rutaOrigenAbsoluta] = { archivos: {}, carpetas: {} };
+  }
+  registro[tarea.rutaOrigenAbsoluta].id_destino_folder = idNuevaCarpeta;
+}
+
+/**
+ * Ejecuta una tarea de tipo "copiarArchivo".
+ * Actualiza el objeto 'registro' con el ID y metadatos del archivo copiado.
+ * @param {Object} tarea Objeto de la tarea a ejecutar.
+ * @param {Object} registro Objeto de log principal (se modifica directamente).
+ * @param {String} idCarpetaDestinoRaiz ID de la carpeta destino raíz.
+ */
+function ejecutarTareaCopiarArchivo(tarea, registro, idCarpetaDestinoRaiz) {
+  Logger.log(`Ejecutando copiarArchivo: ${tarea.nombre} a ${tarea.rutaPadreDestinoLogKey}`);
+  let idCarpetaPadreDestino;
+
+  if (registro[tarea.rutaPadreDestinoLogKey] && registro[tarea.rutaPadreDestinoLogKey].id_destino_folder) {
+    idCarpetaPadreDestino = registro[tarea.rutaPadreDestinoLogKey].id_destino_folder;
+  } else {
+     if (tarea.rutaPadreDestinoLogKey === `/${registro.__raiz}`) {
+        idCarpetaPadreDestino = idCarpetaDestinoRaiz;
+    } else {
+        throw new Error(`No se pudo encontrar el ID de la carpeta destino padre '${tarea.rutaPadreDestinoLogKey}' para el archivo '${tarea.nombre}'.`);
     }
   }
 
-  return nuevosCopiados;
+  const carpetaPadreDestinoDrive = DriveApp.getFolderById(idCarpetaPadreDestino);
+  const archivoOrigen = DriveApp.getFileById(tarea.idArchivoOrigen);
+
+  // Antes de copiar, verificar si un archivo con el mismo nombre ya existe en destino y borrarlo.
+  // Esto asegura que la copia sea "fresca" y evita el "(1)" de Drive si se hace makeCopy sobre existente.
+  const archivosExistentes = carpetaPadreDestinoDrive.getFilesByName(tarea.nombre);
+  while (archivosExistentes.hasNext()) {
+    const archivoExistente = archivosExistentes.next();
+    // Comprobar si es el mismo que está registrado (si aplica)
+    const archivoRegistrado = registro[tarea.rutaPadreDestinoLogKey]?.archivos?.[tarea.nombre];
+    if (archivoRegistrado && archivoRegistrado.id === archivoExistente.getId()) {
+        // Es el archivo que registramos previamente, probablemente modificado.
+        Logger.log(`Archivo '${tarea.nombre}' (ID: ${archivoExistente.getId()}) existe y está registrado. Se reemplazará (borrando y copiando).`);
+    } else {
+        Logger.log(`Archivo con nombre '${tarea.nombre}' (ID: ${archivoExistente.getId()}) encontrado en destino. Se reemplazará (borrando y copiando).`);
+    }
+    archivoExistente.setTrashed(true); // Enviar a la papelera
+  }
+  
+  const copiaArchivo = archivoOrigen.makeCopy(tarea.nombre, carpetaPadreDestinoDrive);
+  Logger.log(`Archivo '${tarea.nombre}' copiado con ID: ${copiaArchivo.getId()}`);
+  
+  // Actualizar el registro:
+  if (!registro[tarea.rutaPadreDestinoLogKey].archivos) {
+    registro[tarea.rutaPadreDestinoLogKey].archivos = {};
+  }
+  registro[tarea.rutaPadreDestinoLogKey].archivos[tarea.nombre] = {
+    id: copiaArchivo.getId(),
+    size: tarea.sizeOrigen,
+    modificado: tarea.modificadoOrigen // Guardar metadatos del origen
+  };
 }
 
+// ==========================================================================
+// FUNCIÓN DE PLANIFICACIÓN (DETALLADA)
+// ==========================================================================
+/**
+ * Genera la lista de tareas pendientes (archivos a copiar, carpetas a crear).
+ * @param {GoogleAppsScript.Drive.Folder} carpetaOrigenRaiz El objeto Folder de origen raíz.
+ * @param {GoogleAppsScript.Drive.Folder} carpetaDestinoRaiz El objeto Folder de destino raíz.
+ * @param {String} nombreRaizOrigen El nombre de la carpeta raíz de origen (para las rutas en el log).
+ * @param {Object} registro El objeto de log actual (puede tener información de ejecuciones previas).
+ * @param {Array} listaTareas Array (pasado por referencia) donde se añadirán las tareas.
+ */
+function generarListaDeTareas(carpetaOrigenRaiz, carpetaDestinoRaiz, nombreRaizOrigen, registro, listaTareas) {
+  Logger.log(`Iniciando generación de lista de tareas para origen: ${carpetaOrigenRaiz.getName()}, destino: ${carpetaDestinoRaiz.getName()}`);
+  const rutaLogRaiz = `/${nombreRaizOrigen}`;
+
+  // Asegurar que la ruta raíz existe en el registro y tiene el ID de la carpeta destino raíz.
+  if (!registro[rutaLogRaiz]) {
+    registro[rutaLogRaiz] = { archivos: {}, carpetas: {} };
+  }
+  // Este ID es el punto de partida para todas las operaciones en el destino.
+  registro[rutaLogRaiz].id_destino_folder = carpetaDestinoRaiz.getId();
+
+  // Iniciar la planificación recursiva desde la raíz.
+  planificarRecursivamente(carpetaOrigenRaiz, rutaLogRaiz, registro, listaTareas, carpetaDestinoRaiz);
+  
+  Logger.log(`Generación de lista de tareas finalizada. Total tareas planificadas: ${listaTareas.length}`);
+}
+
+/**
+ * Función auxiliar recursiva para planificar tareas.
+ * @param {GoogleAppsScript.Drive.Folder} carpetaOrigenActual Carpeta origen que se está procesando.
+ * @param {String} rutaLogActual Key en el 'registro' para la carpetaOrigenActual (ej: "/Raiz/SubDir").
+ * @param {Object} registro El objeto de log principal.
+ * @param {Array} listaTareas Array donde se añaden las tareas.
+ * @param {GoogleAppsScript.Drive.Folder | null} carpetaDestinoDriveActual Objeto Folder de Drive para la carpeta destino correspondiente.
+ * Puede ser 'null' si la carpeta destino aún no existe (y está por ser creada).
+ */
+function planificarRecursivamente(carpetaOrigenActual, rutaLogActual, registro, listaTareas, carpetaDestinoDriveActual) {
+  Logger.log(`Planificando para: ${rutaLogActual}`);
+
+  // Asegurar que la entrada para la ruta actual exista en el registro
+  if (!registro[rutaLogActual]) {
+    registro[rutaLogActual] = { archivos: {}, carpetas: {} };
+  }
+  // Si tenemos el objeto carpetaDestinoDriveActual, aseguramos que su ID esté en el registro.
+  if (carpetaDestinoDriveActual) {
+      registro[rutaLogActual].id_destino_folder = carpetaDestinoDriveActual.getId();
+  }
+
+
+  // --- 1. PROCESAR SUBCARPETAS ---
+  const subcarpetasOrigen = carpetaOrigenActual.getFolders();
+  while (subcarpetasOrigen.hasNext()) {
+    const subCarpetaO = subcarpetasOrigen.next();
+    const nombreSubCarpeta = subCarpetaO.getName();
+    const rutaLogSubCarpeta = `${rutaLogActual}/${nombreSubCarpeta}`; // Path para el registro
+
+    let subCarpetaDestinoDrive = null; // Objeto Folder para la subcarpeta en destino
+    let necesitaCrearTareaCarpeta = true;
+
+    // Verificar contra el registro y Drive
+    const idSubCarpetaDestinoRegistrada = registro[rutaLogActual]?.carpetas?.[nombreSubCarpeta];
+    if (idSubCarpetaDestinoRegistrada) {
+      try {
+        const folder = DriveApp.getFolderById(idSubCarpetaDestinoRegistrada);
+        if (folder.isTrashed()) {
+          Logger.log(`Carpeta destino '${rutaLogSubCarpeta}' (ID: ${idSubCarpetaDestinoRegistrada}) está en papelera. Se marcará para recrear.`);
+          delete registro[rutaLogActual].carpetas[nombreSubCarpeta]; // Limpiar registro de ID inválido
+          if(registro[rutaLogSubCarpeta]) delete registro[rutaLogSubCarpeta].id_destino_folder;
+        } else {
+          subCarpetaDestinoDrive = folder;
+          necesitaCrearTareaCarpeta = false;
+        }
+      } catch (e) {
+        Logger.log(`Carpeta destino '${rutaLogSubCarpeta}' (ID: ${idSubCarpetaDestinoRegistrada}) no accesible: ${e.message}. Se marcará para recrear.`);
+        delete registro[rutaLogActual].carpetas[nombreSubCarpeta]; // Limpiar registro de ID inválido
+        if(registro[rutaLogSubCarpeta]) delete registro[rutaLogSubCarpeta].id_destino_folder;
+      }
+    } else if (carpetaDestinoDriveActual) { // Si no está en registro, pero la carpeta padre destino existe, buscar por nombre
+      const iteradorCarpetasDestino = carpetaDestinoDriveActual.getFoldersByName(nombreSubCarpeta);
+      if (iteradorCarpetasDestino.hasNext()) {
+        subCarpetaDestinoDrive = iteradorCarpetasDestino.next();
+        // Encontramos una carpeta existente no registrada. La registramos.
+        if (!registro[rutaLogActual].carpetas) registro[rutaLogActual].carpetas = {};
+        registro[rutaLogActual].carpetas[nombreSubCarpeta] = subCarpetaDestinoDrive.getId();
+        if (!registro[rutaLogSubCarpeta]) registro[rutaLogSubCarpeta] = { archivos: {}, carpetas: {} };
+        registro[rutaLogSubCarpeta].id_destino_folder = subCarpetaDestinoDrive.getId();
+        necesitaCrearTareaCarpeta = false;
+        Logger.log(`Subcarpeta '${nombreSubCarpeta}' encontrada en destino (no registrada previamente). Registrada.`);
+      }
+    }
+
+    if (necesitaCrearTareaCarpeta) {
+      listaTareas.push({
+        tipo: "crearCarpeta",
+        nombre: nombreSubCarpeta,
+        rutaOrigenAbsoluta: rutaLogSubCarpeta,
+        rutaPadreDestinoLogKey: rutaLogActual, // El padre es la carpeta actual que estamos procesando
+        intentos: 0
+      });
+      // Preparamos la entrada en el registro para esta nueva carpeta, aunque aún no tenga ID de destino.
+      if (!registro[rutaLogSubCarpeta]) registro[rutaLogSubCarpeta] = { archivos: {}, carpetas: {} };
+      // Llamada recursiva: pasamos 'null' como carpetaDestinoDrive, ya que aún no se ha creado.
+      planificarRecursivamente(subCarpetaO, rutaLogSubCarpeta, registro, listaTareas, null);
+    } else if (subCarpetaDestinoDrive) { // La carpeta existe en destino
+      // Asegurar que el ID de destino esté en la entrada propia de la subcarpeta en el registro.
+      if (!registro[rutaLogSubCarpeta]) registro[rutaLogSubCarpeta] = { archivos: {}, carpetas: {} };
+      registro[rutaLogSubCarpeta].id_destino_folder = subCarpetaDestinoDrive.getId();
+      planificarRecursivamente(subCarpetaO, rutaLogSubCarpeta, registro, listaTareas, subCarpetaDestinoDrive);
+    }
+  }
+
+  // --- 2. PROCESAR ARCHIVOS ---
+  const archivosOrigen = carpetaOrigenActual.getFiles();
+  while (archivosOrigen.hasNext()) {
+    const archivoO = archivosOrigen.next();
+    const nombreArchivo = archivoO.getName();
+    // La rutaLogArchivo es la rutaOrigenAbsoluta para la tarea
+    const rutaLogArchivo = `${rutaLogActual}/${nombreArchivo}`;
+
+    const sizeO = archivoO.getSize();
+    const modificadoO = archivoO.getLastUpdated().getTime();
+    let necesitaCrearTareaArchivo = true;
+
+    // Verificar contra el registro
+    const infoArchivoRegistrado = registro[rutaLogActual]?.archivos?.[nombreArchivo];
+    if (infoArchivoRegistrado) {
+      if (infoArchivoRegistrado.size === sizeO && infoArchivoRegistrado.modificado === modificadoO) {
+        try {
+          const archivoDestinoDrive = DriveApp.getFileById(infoArchivoRegistrado.id);
+          if (!archivoDestinoDrive.isTrashed()) {
+            necesitaCrearTareaArchivo = false; // Coincide y existe
+          } else {
+            Logger.log(`Archivo destino '${rutaLogArchivo}' (ID: ${infoArchivoRegistrado.id}) en papelera. Se marcará para recopiar.`);
+            // No es necesario borrar del registro aquí, la tarea de copia lo sobrescribirá.
+          }
+        } catch (e) {
+          Logger.log(`Archivo destino '${rutaLogArchivo}' (ID: ${infoArchivoRegistrado.id}) no accesible: ${e.message}. Se marcará para recopiar.`);
+        }
+      } else {
+         Logger.log(`Archivo '${rutaLogArchivo}' ha cambiado (tamaño/fecha) desde el último registro. Se marcará para recopiar.`);
+      }
+    } else if (carpetaDestinoDriveActual) { // Si no está en registro, pero la carpeta padre destino existe, buscar por nombre
+        const iteradorArchivosDestino = carpetaDestinoDriveActual.getFilesByName(nombreArchivo);
+        if (iteradorArchivosDestino.hasNext()) {
+            const archivoDestinoDrive = iteradorArchivosDestino.next();
+            // Comparamos solo tamaño por simplicidad (fechas de modificación pueden variar con copias)
+            // Para una mayor precisión, se podría comparar un hash si fuera viable.
+            if (archivoDestinoDrive.getSize() === sizeO) {
+                // Encontramos un archivo no registrado que parece ser el mismo. Lo registramos.
+                if (!registro[rutaLogActual].archivos) registro[rutaLogActual].archivos = {};
+                registro[rutaLogActual].archivos[nombreArchivo] = {
+                    id: archivoDestinoDrive.getId(),
+                    size: sizeO,
+                    modificado: modificadoO // Guardamos la fecha del origen
+                };
+                necesitaCrearTareaArchivo = false;
+                Logger.log(`Archivo '${nombreArchivo}' encontrado en destino (no registrado previamente) y coincide en tamaño. Registrado.`);
+            } else {
+                 Logger.log(`Archivo '${nombreArchivo}' encontrado en destino (no registrado previamente) pero difiere en tamaño. Se marcará para copiar (sobrescribir).`);
+            }
+        }
+    }
+
+
+    if (necesitaCrearTareaArchivo) {
+      listaTareas.push({
+        tipo: "copiarArchivo",
+        nombre: nombreArchivo,
+        idArchivoOrigen: archivoO.getId(),
+        rutaOrigenAbsoluta: rutaLogArchivo,
+        rutaPadreDestinoLogKey: rutaLogActual,
+        sizeOrigen: sizeO,
+        modificadoOrigen: modificadoO,
+        intentos: 0
+      });
+      // Registrar archivos grandes (opcional, ya lo tenías)
+      if (sizeO > 100 * 1024 * 1024 && registro.__pesados && !registro.__pesados.some(p => p.startsWith(rutaLogArchivo))) {
+         registro.__pesados.push(`${rutaLogArchivo} (${Math.round(sizeO / 1024 / 1024)} MB)`);
+      }
+    }
+  }
+}
+
+
+// ==========================================================================
+// FUNCIONES DE UTILIDAD PARA TRIGGERS Y PROPERTIES
+// ==========================================================================
+function crearSiguienteTrigger(nombreFuncionTrigger) {
+  // Primero, borrar cualquier trigger existente con el mismo manejador para evitar duplicados.
+  // Esto es crucial si el script se detuvo inesperadamente antes de borrar su propio trigger.
+  borrarTriggerActualPorNombre(nombreFuncionTrigger); 
+
+  const trigger = ScriptApp.newTrigger(nombreFuncionTrigger)
+    .timeBased()
+    .after(TRIGGER_DELAY_MS)
+    .create();
+  PropertiesService.getUserProperties().setProperty(PS_KEYS.TRIGGER_ID, trigger.getUniqueId());
+  Logger.log(`Trigger creado con ID: ${trigger.getUniqueId()} para ejecutar ${nombreFuncionTrigger} en ${TRIGGER_DELAY_MS / 1000}s.`);
+}
+
+function borrarTriggerActualPorNombre(nombreFuncionTrigger) {
+  const userProps = PropertiesService.getUserProperties();
+  const triggerIdActual = userProps.getProperty(PS_KEYS.TRIGGER_ID);
+
+  const projectTriggers = ScriptApp.getProjectTriggers();
+  let borrado = false;
+
+  // Intenta borrar por ID si lo tenemos
+  if (triggerIdActual) {
+    for (let i = 0; i < projectTriggers.length; i++) {
+      if (projectTriggers[i].getUniqueId() === triggerIdActual) {
+        ScriptApp.deleteTrigger(projectTriggers[i]);
+        Logger.log(`Trigger con ID ${triggerIdActual} borrado.`);
+        borrado = true;
+        break;
+      }
+    }
+  }
+  
+  // Si no se borró por ID (o no teníamos ID), intentar borrar por nombre de función (menos preciso)
+  // Esto sirve como limpieza adicional si el ID se perdió o si hay triggers huérfanos.
+  if (!borrado) {
+    for (let i = 0; i < projectTriggers.length; i++) {
+      if (projectTriggers[i].getHandlerFunction() === nombreFuncionTrigger) {
+        ScriptApp.deleteTrigger(projectTriggers[i]);
+        Logger.log(`Trigger huérfano para la función ${nombreFuncionTrigger} borrado.`);
+        // No rompemos el bucle aquí, podría haber múltiples huérfanos si algo salió muy mal.
+      }
+    }
+  }
+  userProps.deleteProperty(PS_KEYS.TRIGGER_ID); // Limpiar el ID de la propiedad
+}
+
+function limpiarPropiedadesBatch() {
+  const userProps = PropertiesService.getUserProperties();
+  userProps.deleteProperty(PS_KEYS.BATCH_ACTIVE);
+  userProps.deleteProperty(PS_KEYS.LOG_FILENAME);
+  userProps.deleteProperty(PS_KEYS.TASK_INDEX);
+  userProps.deleteProperty(PS_KEYS.TRIGGER_ID); // Asegurarse de limpiar el ID del trigger
+  userProps.deleteProperty(PS_KEYS.DESTINATION_FOLDER_ID);
+  userProps.deleteProperty(PS_KEYS.SOURCE_FOLDER_ID);
+  Logger.log("Propiedades de usuario para el proceso por lotes limpiadas.");
+}
+
+
+// ==========================================================================
+// FUNCIÓN PARA LA INTERFAZ HTML (SONDEO DE ESTADO)
+// ==========================================================================
+function obtenerEstadoCopia() {
+  const userProps = PropertiesService.getUserProperties();
+  const batchActivo = userProps.getProperty(PS_KEYS.BATCH_ACTIVE) === 'true';
+  const logFileName = userProps.getProperty(PS_KEYS.LOG_FILENAME);
+  const idDestinoActual = userProps.getProperty(PS_KEYS.DESTINATION_FOLDER_ID); // Obtenerlo siempre
+
+
+  if (!batchActivo && !logFileName) { // Ni activo, ni un log reciente de un proceso
+    return {
+      procesoActivo: false,
+      mensaje: "No hay ningún proceso de copia activo o información de un proceso reciente.",
+      progreso: null,
+      urlRegistro: null
+    };
+  }
+  
+  // Si no está activo pero hay un logFileName, significa que el proceso terminó.
+  // Cargamos ese último log para dar el estado final.
+  if (!logFileName) { // Debería haber sido limpiado si no está activo, pero por si acaso.
+      return { procesoActivo: batchActivo, mensaje: "Proceso activo pero sin archivo de log configurado (estado inconsistente).", progreso: null, urlRegistro: null };
+  }
+
+  try {
+    const carpetaInformes = obtenerOCrearCarpeta(NOMBRE_CARPETA_INFORMES);
+    const archivos = carpetaInformes.getFilesByName(logFileName);
+    let urlReg = null;
+    if (archivos.hasNext()) {
+      const archivoLog = archivos.next();
+      const registro = JSON.parse(archivoLog.getBlob().getDataAsString());
+      urlReg = archivoLog.getUrl();
+      return {
+        procesoActivo: batchActivo, // Podría ser true (en curso) o false (recién terminado)
+        mensaje: registro.__progreso?.mensajeActual || "Consultando estado...",
+        progreso: registro.__progreso,
+        estadoGeneral: registro.__estado_proceso,
+        totalTareas: registro.__progreso?.totalTareas || 0,
+        tareasCompletadas: registro.__progreso?.tareasCompletadas || 0,
+        errores: registro.__errores,
+        urlRegistro: archivoLog.getUrl()
+      };
+    } else {
+      // Si el log no se encuentra pero se esperaba, es un problema.
+      if (batchActivo) {
+          return { 
+            procesoActivo: batchActivo,
+        mensaje: registro.__progreso?.mensajeActual || (batchActivo ? "Consultando estado..." : "Proceso finalizado."),
+        progreso: registro.__progreso,
+        estadoGeneral: registro.__estado_proceso,
+        totalTareas: registro.__progreso?.totalTareas || 0,
+        tareasCompletadas: registro.__progreso?.tareasCompletadas || 0,
+        errores: registro.__errores,
+        urlRegistro: urlReg, // Devolver siempre la URL del log actual si existe
+        idDestino: idDestinoActual // Devolver siempre el ID del destino si existe
+          };
+      } else { // Proceso no activo, y el log que teníamos registrado ya no está.
+          return { procesoActivo: false, mensaje: "No se encontró información del último proceso.", progreso: null, urlRegistro: null };
+      }
+    }
+  } catch (e) {
+    Logger.log("Error en obtenerEstadoCopia: " + e.stack);
+    return {
+      procesoActivo: batchActivo, // Devuelve el estado de actividad conocido
+      mensaje: "Error al obtener el estado de la copia: " + e.message,
+      progreso: null,
+      urlRegistro: null
+    };
+  }
+}
+
+
+// ==========================================================================
+// TUS FUNCIONES EXISTENTES (revisar y adaptar si es necesario más adelante)
+// ==========================================================================
+
 function verificarIntegridad(datos) {
+  let idCarpetaDestino = null;
+  let nombreDestinoReal = datos.nombreDestino ? datos.nombreDestino.trim() : null;
+  let urlRegistro = null;
+
   try {
     const idOrigen = datos.idCarpeta.trim();
-    const nombreDestino = datos.nombreDestino.trim();
-    const carpetaOrigen = DriveApp.getFolderById(idOrigen);
+    if (!nombreDestinoReal) throw new Error("El nombre de la carpeta destino es requerido.");
 
-    const carpetas = DriveApp.getFoldersByName(nombreDestino);
-    if (!carpetas.hasNext()) {
-      return `❌ No se encontró la carpeta de destino "${nombreDestino}".`;
+    const carpetaOrigen = DriveApp.getFolderById(idOrigen);
+    const carpetasDestinoIter = DriveApp.getFoldersByName(nombreDestinoReal);
+
+    if (!carpetasDestinoIter.hasNext()) {
+      return { 
+        mensaje: `❌ No se encontró la carpeta de destino "${nombreDestinoReal}".`, 
+        esCoincidente: false, 
+        idDestino: null, 
+        urlRegistro: null,
+        nombreDestino: nombreDestinoReal
+      };
+    }
+    const carpetaDestino = carpetasDestinoIter.next();
+    idCarpetaDestino = carpetaDestino.getId();
+
+    const dataRegistro = cargarRegistro(nombreDestinoReal);
+    const registro = dataRegistro.registroJson;
+    if (dataRegistro.archivoLog) {
+      urlRegistro = dataRegistro.archivoLog.getUrl();
     }
 
-    const carpetaDestino = carpetas.next();
-    const registro = cargarRegistro(nombreDestino);
-    const nombreRaizOrigen = carpetaOrigen.getName();
-    const resultado = compararEstructuras(carpetaOrigen, carpetaDestino, "", registro, nombreRaizOrigen);
-    //const resultado = compararEstructuras(carpetaOrigen, carpetaDestino, "", registro);
-    
+    if (Object.keys(registro).length === 0 || !registro.__raiz) { // Si el registro está vacío o no tiene __raiz
+        return {
+            mensaje: `ℹ️ No existe un registro de copia válido o completo para "${nombreDestinoReal}". No se puede verificar contra él. Considere ejecutar una copia primero.`,
+            esCoincidente: false, 
+            idDestino: idCarpetaDestino,
+            urlRegistro: urlRegistro, // Puede haber un log vacío, pero lo pasamos.
+            nombreDestino: nombreDestinoReal
+        };
+    }
 
-    if (resultado.trim() === "") {
-      return "✅ Todo coincide: no se encontraron diferencias entre origen y destino.";
+    const nombreRaizOrigen = registro.__raiz || carpetaOrigen.getName();
+    const resultadoComparacion = compararEstructuras(carpetaOrigen, carpetaDestino, "", registro, nombreRaizOrigen);
+
+    let mensajeFinal;
+    let esCoincidenteLocal = false;
+
+    if (resultadoComparacion.trim() === "") {
+      mensajeFinal = "✅ Todo coincide: no se encontraron diferencias entre origen y destino según el último registro.";
+      esCoincidenteLocal = true;
     } else {
-      return `
-        <strong>⚠ Verificación finalizada con incidencias:</strong><br><br>${resultado}
+      mensajeFinal = `
+        <strong>⚠ Verificación finalizada con incidencias (comparado con origen y último registro):</strong><br><br>${resultadoComparacion}
         <br><br>🔁 Puedes volver a lanzar la copia para intentar completar o actualizar los elementos.
         <br><br>🧹 Si deseas eliminar del destino los elementos que ya no están en el origen, usa el botón de <strong>Limpiar</strong>.`;
+      esCoincidenteLocal = false;
     }
 
+    return {
+      mensaje: mensajeFinal,
+      esCoincidente: esCoincidenteLocal,
+      idDestino: idCarpetaDestino,
+      urlRegistro: urlRegistro,
+      nombreDestino: nombreDestinoReal
+    };
+
   } catch (e) {
-    return "❌ Error al verificar integridad: " + e.message;
+    Logger.log(`Error en verificarIntegridad para "${nombreDestinoReal}": <span class="math-inline">\{e\.message\}\\n</span>{e.stack}`);
+    return { 
+        mensaje: "❌ Error al verificar integridad: " + e.message, 
+        esCoincidente: false, 
+        idDestino: idCarpetaDestino, // Puede que lo tengamos si el error fue después de obtenerlo
+        urlRegistro: urlRegistro, // Puede que lo tengamos
+        nombreDestino: nombreDestinoReal
+    };
   }
 }
 
@@ -355,7 +1012,6 @@ function cargarRegistro(nombreDestino) {
     while (archivos.hasNext()) {
       const archivo = archivos.next();
       const nombre = archivo.getName();
-
       if (!nombre.startsWith(prefijo)) continue;
 
       const fecha = archivo.getLastUpdated().getTime();
@@ -365,12 +1021,28 @@ function cargarRegistro(nombreDestino) {
       }
     }
 
-    if (!ultimoArchivo) return {};
+    if (!ultimoArchivo) {
+      // Devolver estructura consistente incluso si no hay log
+      return { 
+        registroJson: { /* podrías inicializar con estructura base si es necesario */
+            __errores: [], __pesados: [], __pendientes: [], 
+            __progreso: { totalTareas: 0, tareasCompletadas: 0, erroresEnLote: 0, mensajeActual: "No se encontró registro previo."}
+        }, 
+        archivoLog: null 
+      };
+    }
     const contenido = ultimoArchivo.getBlob().getDataAsString();
-    return JSON.parse(contenido);
+    return { registroJson: JSON.parse(contenido), archivoLog: ultimoArchivo };
   } catch (e) {
-      Logger.log("Error al cargar el registro: " + e.message);
-      return {};
+    Logger.log(`Error al cargar el registro para "${nombreDestino}": <span class="math-inline">\{e\.message\}\\n</span>{e.stack}`);
+    // Devolver estructura consistente en caso de error
+    return { 
+      registroJson: {
+            __errores: [`Error cargando registro: ${e.message}`], __pesados: [], __pendientes: [], 
+            __progreso: { totalTareas: 0, tareasCompletadas: 0, erroresEnLote: 0, mensajeActual: "Error al cargar registro."}
+      }, 
+      archivoLog: null 
+    };
   }
 }
 

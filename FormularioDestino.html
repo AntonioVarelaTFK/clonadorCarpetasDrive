@@ -136,87 +136,402 @@
 
       <div class="spinner" id="spinner"></div>
       <div id="resultado"></div>
+      <div id="estadoProgreso" style="margin-top: 15px; padding: 10px; border-radius: 4px;"></div>
     </div>
 
+
     <script>
+      const POLLING_INTERVAL_MS = 7000; // Consultar estado cada 7 segundos
+      let pollingIntervalId = null;
+      let nombreDestinoGlobal = ""; // Para usar en funciones de comprimir, etc.
+
+      function verificar() {
+        const datos = {
+          idCarpeta: document.getElementById("idCarpeta").value.trim(),
+          nombreDestino: document.getElementById("nombreDestino").value.trim() || nombreDestinoGlobal
+        };
+        // No actualizamos nombreDestinoGlobal aquí, solo lo usamos si el campo está vacío.
+        // Si el usuario lo cambia, esa será la nueva referencia para esta operación.
+
+        if (!datos.idCarpeta || !datos.nombreDestino) {
+          mostrarResultado("<div class='mensaje-error'>Introduce el ID de carpeta y nombre destino para verificar.</div>");
+          return;
+        }
+
+        mostrarSpinner(true);
+        deshabilitarBotones(true);
+        document.getElementById("estadoProgreso").innerHTML = ""; // Limpiar progreso anterior
+        mostrarResultado("🔎 Verificando integridad...");
+
+        google.script.run
+          .withSuccessHandler(function (res) { // res es ahora un objeto
+            mostrarSpinner(false);
+            // Guardar IDs globales que devuelve verificarIntegridad
+            idDestinoGlobal = res.idDestino || null;
+            urlRegistroGlobal = res.urlRegistro || null;
+            nombreDestinoGlobal = res.nombreDestino || datos.nombreDestino;
+
+
+            let claseResultado = "mensaje-info"; // Default
+            if (res.esCoincidente) {
+                claseResultado = "mensaje-ok";
+            } else if (res.mensaje.includes("❌") || res.mensaje.includes("Error")) {
+                claseResultado = "mensaje-error";
+            } else if (res.mensaje.includes("⚠")) {
+                claseResultado = "mensaje-aviso";
+            }
+            
+            mostrarResultado(`<div class="${claseResultado}">${res.mensaje}</div>`);
+
+            if (res.idDestino) { // Solo agregar botones si tenemos al menos el idDestino
+                agregarBotonesPostProceso(res.idDestino, res.urlRegistro, res.nombreDestino, res.esCoincidente);
+            }
+            deshabilitarBotones(false); // Habilitar botones después de la verificación
+          })
+          .withFailureHandler(function(err){
+            mostrarSpinner(false);
+            deshabilitarBotones(false);
+            mostrarResultado(`<div class="mensaje-error">Error al verificar: ${err.message}</div>`);
+          })
+          .verificarIntegridad(datos);
+      }
+
       function enviar() {
         const datos = {
           idCarpeta: document.getElementById("idCarpeta").value.trim(),
           nombreDestino: document.getElementById("nombreDestino").value.trim(),
           modo: "auto"
         };
+        nombreDestinoGlobal = datos.nombreDestino;
 
         if (!datos.idCarpeta) {
-          document.getElementById("resultado").innerHTML = "<div class='mensaje-error'>Por favor, introduce un ID de carpeta.</div>";
+          mostrarResultado("<div class='mensaje-error'>Por favor, introduce un ID de carpeta origen.</div>");
+          return;
+        }
+        if (!datos.nombreDestino) {
+          mostrarResultado("<div class='mensaje-error'>Por favor, introduce un nombre para la carpeta destino.</div>");
           return;
         }
 
-        document.getElementById("spinner").style.display = "block";
-        document.getElementById("resultado").innerHTML = "Procesando copia...";
+        mostrarSpinner(true);
+        deshabilitarBotones(true); 
+        mostrarResultado("🚀 Iniciando comunicación con el servidor..."); 
+        document.getElementById("estadoProgreso").innerHTML = "";
+
 
         google.script.run
           .withSuccessHandler(function (res) {
-            document.getElementById("spinner").style.display = "none";
+            mostrarSpinner(false);
+            // Guardar IDs y URLs globales si el proceso las devuelve, incluso si no fue por lotes
+            idDestinoGlobal = res.idDestino || null;
+            urlRegistroGlobal = res.urlRegistro || null;
 
-            document.getElementById("resultado").innerHTML = `
-              <div class="mensaje-ok">${res.mensaje}</div>
-              <div style="text-align: center; margin-top: 20px;">
-                <button onclick="window.open('https://drive.google.com/drive/folders/${res.idDestino}', '_blank')" style="margin-top:10px">
-                  Abrir carpeta en Drive
-                </button><br><br>
-                <button onclick="window.open('${res.urlRegistro}', '_blank')" style="margin-top:5px">
-                  Ver archivo de progreso
-                </button>
-              </div>
-            `;
+            if (res.procesoPorLotesIniciado) {
+              mostrarResultado(''); 
+              iniciarSondeoDeEstado(res.nombreDestino); // nombreDestino se pasa para consistencia en agregarBotonesPostProceso
+            } else {
+              let claseMensaje = "mensaje-ok";
+              if (!res.mensaje || res.mensaje.includes("❌") || res.mensaje.includes("Error")) {
+                claseMensaje = "mensaje-error";
+              }
+              mostrarResultado(`<div class="${claseMensaje}">${res.mensaje || "El proceso no se inició o ya finalizó. Verifique la configuración."}</div>`);
+              if (idDestinoGlobal && urlRegistroGlobal) { 
+                 agregarBotonesPostProceso(idDestinoGlobal, urlRegistroGlobal, res.nombreDestino, claseMensaje === "mensaje-ok");
+              }
+              deshabilitarBotones(false); 
+            }
           })
-          .iniciarCopia(datos);
+          .withFailureHandler(function(err) {
+            mostrarSpinner(false);
+            deshabilitarBotones(false);
+            mostrarResultado(`<div class="mensaje-error">Error al contactar el servidor: ${err.message}</div>`);
+            document.getElementById("estadoProgreso").innerHTML = "";
+          })
+          .iniciarCopiaPorLotes(datos);
       }
 
-      function verificar() {
+      function iniciarSondeoDeEstado(nombreDestino) {
+        if (pollingIntervalId) {
+          clearInterval(pollingIntervalId);
+        }
+        // Llamada inmediata para obtener el primer estado rápido
+        // y asegurarse que deshabilitarBotones(true) se aplique si no lo hizo antes
+        deshabilitarBotones(true); 
+        consultarEstado(nombreDestino); 
+        pollingIntervalId = setInterval(function() { consultarEstado(nombreDestino); }, POLLING_INTERVAL_MS);
+      }
+
+      function consultarEstado(nombreDestino) {
+        const dest = nombreDestino || nombreDestinoGlobal;
+        google.script.run
+          .withSuccessHandler(function(estado) {
+            actualizarUIEstado(estado, dest);
+          })
+          .withFailureHandler(function(err) {
+            const estadoHtml = document.getElementById("estadoProgreso");
+            // No mostrar un mensaje de error muy intrusivo aquí, ya que puede ser temporal
+            // y se sobreescribirá con el siguiente sondeo exitoso.
+            if (estadoHtml.innerHTML.includes("mensaje-info")) { // Solo añadir si ya hay un mensaje de progreso
+                estadoHtml.innerHTML += `<div class="mensaje-aviso" style="font-size:0.8em; opacity:0.7;">(Fallo temporal al actualizar estado)</div>`;
+            }
+            console.warn("Fallo temporal al consultar estado:", err);
+          })
+          .obtenerEstadoCopia();
+      }
+
+      function actualizarUIEstado(estado, nombreDestino) {
+        const estadoHtml = document.getElementById("estadoProgreso");
+        const resultadoHtml = document.getElementById("resultado");
+        let progresoMensaje = "";
+
+        // Guardar IDs actualizados que vienen del sondeo
+        if(estado.idDestino) idDestinoGlobal = estado.idDestino;
+        if(estado.urlRegistro) urlRegistroGlobal = estado.urlRegistro;
+
+        if (estado.procesoActivo) {
+          mostrarSpinner(true); 
+          deshabilitarBotones(true); 
+          if (estado.progreso) {
+            progresoMensaje = `<div>${estado.mensaje || "Procesando..."}</div>`;
+            if (estado.progreso.totalTareas > 0) {
+              const porcentaje = estado.progreso.totalTareas > 0 ?
+                                 Math.round((estado.progreso.tareasCompletadas / estado.progreso.totalTareas) * 100) : 0;
+              progresoMensaje += `
+                <div style="margin-top: 5px;">
+                  Tareas: ${estado.progreso.tareasCompletadas} de ${estado.progreso.totalTareas} (${porcentaje}%)
+                </div>
+                <div style="background-color: #e0e0e0; border-radius: 4px; padding: 2px; margin-top: 5px;">
+                  <div style="width: ${porcentaje}%; background-color: #4285F4; color: white; text-align: center; border-radius: 2px; padding: 1px 0;">
+                    ${porcentaje >= 5 ? porcentaje + '%' : ''}
+                  </div>
+                </div>
+              `;
+            }
+            if (estado.progreso.erroresEnLote > 0 || (estado.errores && estado.errores.length > 0)) {
+               progresoMensaje += `<div style="color: #c62828; margin-top: 5px;">Errores detectados durante el proceso.</div>`;
+            }
+          } else {
+            progresoMensaje = `<div>${estado.mensaje || "Esperando estado..."}</div>`;
+          }
+          estadoHtml.innerHTML = `<div class="mensaje-info">${progresoMensaje}</div>`;
+          resultadoHtml.innerHTML = ''; 
+
+        } else { // Proceso NO activo
+          mostrarSpinner(false); 
+          clearInterval(pollingIntervalId);
+          pollingIntervalId = null;
+          
+          estadoHtml.innerHTML = ""; 
+
+          let mensajeFinal = "";
+          let claseFinal = "mensaje-info"; 
+
+          if (estado.estadoGeneral === "completado_ok") {
+              mensajeFinal = estado.mensaje || "✅ Proceso completado exitosamente.";
+              claseFinal = "mensaje-ok";
+          } else if (estado.estadoGeneral === "completado_con_errores") {
+              mensajeFinal = estado.mensaje || "🟡 Proceso completado con errores.";
+              claseFinal = "mensaje-aviso";
+          } else if (estado.estadoGeneral === "error_critico") {
+              mensajeFinal = estado.mensaje || "❌ Error crítico durante el proceso.";
+              claseFinal = "mensaje-error";
+          } else {
+              mensajeFinal = estado.mensaje || "El estado del proceso no es concluyente o no hay información reciente.";
+              if (mensajeFinal.includes("Error") || mensajeFinal.includes("fallo")) claseFinal = "mensaje-error";
+              else if (mensajeFinal.includes("No hay ningún proceso")) claseFinal = "mensaje-info"; 
+              else claseFinal = "mensaje-aviso";
+          }
+          
+          resultadoHtml.innerHTML = `<div class="${claseFinal}">${mensajeFinal}</div>`;
+          
+          if (urlRegistroGlobal && (estado.estadoGeneral === "completado_ok" || estado.estadoGeneral === "completado_con_errores")) {
+             agregarBotonesPostProceso(idDestinoGlobal, urlRegistroGlobal, nombreDestino, estado.estadoGeneral === "completado_ok");
+          }
+          deshabilitarBotones(false); 
+          // console.log("Sondeo detenido. Proceso finalizado o ya no activo."); 
+        }
+      }
+
+
+      function actualizarUIEstado_old(estado, nombreDestino) {
+        const estadoHtml = document.getElementById("estadoProgreso");
+        const resultadoHtml = document.getElementById("resultado");
+        let progresoMensaje = "";
+
+        if (estado.procesoActivo) {
+          deshabilitarBotones(true); // Asegurar que sigan deshabilitados
+          if (estado.progreso) {
+            progresoMensaje = `<div>${estado.mensaje || "Procesando..."}</div>`;
+            if (estado.progreso.totalTareas > 0) {
+              const porcentaje = estado.progreso.totalTareas > 0 ?
+                                 Math.round((estado.progreso.tareasCompletadas / estado.progreso.totalTareas) * 100) : 0;
+              progresoMensaje += `
+                <div style="margin-top: 5px;">
+                  Tareas: ${estado.progreso.tareasCompletadas} de ${estado.progreso.totalTareas} (${porcentaje}%)
+                </div>
+                <div style="background-color: #e0e0e0; border-radius: 4px; padding: 2px; margin-top: 5px;">
+                  <div style="width: ${porcentaje}%; background-color: #4285F4; color: white; text-align: center; border-radius: 2px; padding: 1px 0;">
+                    ${porcentaje >= 5 ? porcentaje + '%' : ''}
+                  </div>
+                </div>
+              `;
+            }
+            if (estado.progreso.erroresEnLote > 0 || (estado.errores && estado.errores.length > 0)) {
+               progresoMensaje += `<div style="color: #c62828; margin-top: 5px;">Errores detectados durante el proceso.</div>`;
+            }
+          } else {
+            progresoMensaje = `<div>${estado.mensaje || "Esperando estado..."}</div>`;
+          }
+          estadoHtml.innerHTML = `<div class="mensaje-info">${progresoMensaje}</div>`;
+          resultadoHtml.innerHTML = ''; // Limpiar el div de resultado mientras el progreso está activo
+
+        } else { // Proceso NO activo
+          clearInterval(pollingIntervalId);
+          pollingIntervalId = null;
+          deshabilitarBotones(false); // Habilitar todos los botones
+          
+          estadoHtml.innerHTML = ""; // Limpiar el área de progreso
+
+          let mensajeFinal = "";
+          let claseFinal = "mensaje-info"; // Clase por defecto
+
+          if (estado.estadoGeneral === "completado_ok") {
+              mensajeFinal = estado.mensaje || "✅ Proceso completado exitosamente.";
+              claseFinal = "mensaje-ok";
+          } else if (estado.estadoGeneral === "completado_con_errores") {
+              mensajeFinal = estado.mensaje || "🟡 Proceso completado con errores.";
+              claseFinal = "mensaje-aviso";
+          } else if (estado.estadoGeneral === "error_critico") {
+              mensajeFinal = estado.mensaje || "❌ Error crítico durante el proceso.";
+              claseFinal = "mensaje-error";
+          } else {
+              // Si estadoGeneral no es uno de los anteriores, pero el proceso no está activo,
+              // podría ser el mensaje genérico de "No hay proceso" o un estado intermedio no capturado.
+              mensajeFinal = estado.mensaje || "El estado del proceso no es concluyente o no hay información reciente.";
+              // Mantener como mensaje-info o cambiar a aviso si el mensaje sugiere un problema.
+              if (mensajeFinal.includes("Error") || mensajeFinal.includes("fallo")) claseFinal = "mensaje-error";
+              else if (mensajeFinal.includes("No hay ningún proceso")) claseFinal = "mensaje-info"; // Para el estado inicial
+              else claseFinal = "mensaje-aviso";
+          }
+          
+          resultadoHtml.innerHTML = `<div class="${claseFinal}">${mensajeFinal}</div>`;
+          
+          // Solo añadir botones de post-proceso si tenemos URL de registro (indica que un log se generó)
+          // y el estado es alguno de los de "completado".
+          if (estado.urlRegistro && (estado.estadoGeneral === "completado_ok" || estado.estadoGeneral === "completado_con_errores")) {
+             agregarBotonesPostProceso(estado.idDestino, estado.urlRegistro, nombreDestino, estado.estadoGeneral === "completado_ok");
+          }
+          // console.log("Sondeo detenido. Proceso finalizado o ya no activo."); // Reemplazo de Logger.log
+        }
+      }
+      
+      // Modificado para aceptar un flag 'exitoso' para el botón de comprimir
+      function agregarBotonesPostProceso(idDestino, urlRegistro, nombreDestino, exitoso) {
+          const resultadoDiv = document.getElementById("resultado");
+          let botonesHtmlBase = `
+            <div style="text-align: center; margin-top: 20px;">
+              <button onclick="window.open('https://drive.google.com/drive/folders/${idDestino}', '_blank')" style="margin-top:10px">
+                Abrir carpeta en Drive
+              </button><br><br>
+              <button onclick="window.open('${urlRegistro}', '_blank')" style="margin-top:5px">
+                Ver archivo de progreso
+              </button>
+            </div>
+          `;
+          
+          if (exitoso) { // Solo mostrar botón de comprimir si la copia fue completamente exitosa
+              google.script.run
+                .withSuccessHandler(function(estimado){
+                   let estimacionHtml = `<div class="mensaje-info" style="margin-top:10px;">${estimado.mensaje}</div>`;
+                   let botonComprimirHtml = `
+                    ${estimacionHtml}
+                    <div style="text-align:center; margin-top: 15px;">
+                      <button onclick="comprimir('${nombreDestino}')" style="background-color:#6d4c41;">
+                        🗜️ Comprimir carpeta destino en ZIP(s)
+                      </button>
+                    </div>`;
+                   resultadoDiv.innerHTML += botonesHtmlBase + botonComprimirHtml;
+                })
+                .withFailureHandler(function(err){
+                    resultadoDiv.innerHTML += botonesHtmlBase; // Añadir solo botones básicos si falla estimación
+                    console.error("Error al obtener estimación de compresión: ", err);
+                })
+                .calcularEstimacionCompresion(nombreDestino);
+          } else {
+              resultadoDiv.innerHTML += botonesHtmlBase; 
+          }
+      }
+
+      function mostrarSpinner(visible) {
+        document.getElementById("spinner").style.display = visible ? "block" : "none";
+      }
+
+      function mostrarResultado(html) {
+        document.getElementById("resultado").innerHTML = html;
+      }
+
+      function deshabilitarBotones(deshabilitar) {
+        const selectoresBotones = [
+          "button[onclick='enviar()']",
+          "button[onclick='verificar()']",
+          "button[onclick='limpiar()']"
+        ];
+        selectoresBotones.forEach(selector => {
+          const boton = document.querySelector(selector);
+          if (boton) {
+            boton.disabled = deshabilitar;
+          } else {
+            // Puede que el botón aún no exista si es la primera carga, no es un error crítico.
+            console.warn("Advertencia: No se encontró el botón con selector:", selector, "para (des)habilitar.");
+          }
+        });
+        // El botón de comprimir se maneja aparte ya que se añade dinámicamente.
+        // Si existe, también lo (des)habilitamos.
+        const botonComprimir = document.querySelector("button[onclick^='comprimir(']"); // Busca onclick que empiece con 'comprimir('
+        if (botonComprimir) {
+            botonComprimir.disabled = deshabilitar;
+        }
+      }
+
+      function verificar_old() {
         const datos = {
           idCarpeta: document.getElementById("idCarpeta").value.trim(),
-          nombreDestino: document.getElementById("nombreDestino").value.trim()
+          nombreDestino: document.getElementById("nombreDestino").value.trim() || nombreDestinoGlobal
         };
+        nombreDestinoGlobal = datos.nombreDestino;
 
         if (!datos.idCarpeta || !datos.nombreDestino) {
-          document.getElementById("resultado").innerHTML = "<div class='mensaje-error'>Introduce el ID de carpeta y nombre destino para verificar.</div>";
+          mostrarResultado("<div class='mensaje-error'>Introduce el ID de carpeta y nombre destino para verificar.</div>");
           return;
         }
 
-        document.getElementById("spinner").style.display = "block";
-        document.getElementById("resultado").textContent = "Verificando integridad...";
+        mostrarSpinner(true);
+        deshabilitarBotones(true);
+        document.getElementById("estadoProgreso").innerHTML = "";
+        mostrarResultado("🔎 Verificando integridad...");
 
         google.script.run
           .withSuccessHandler(function (res) {
-            document.getElementById("spinner").style.display = "none";
+            mostrarSpinner(false);
+            // NO deshabilitar botones aquí todavía, se hará al final de agregarBotonesPostProceso si es necesario
+            // o se habilitarán si no hay más acciones.
 
             let claseResultado = res.includes("✅") ? "mensaje-ok" :
                                  res.includes("❌") ? "mensaje-error" :
                                  "mensaje-aviso";
+            let htmlRes = `<div class="${claseResultado}">${res}</div>`;
+            mostrarResultado(htmlRes);
 
-            let html = `<div class="${claseResultado}">${res}</div>`;
-
-            if (res.includes("✅")) {
-              // Llamamos a calcular estimación
-              const nombreDestino = document.getElementById("nombreDestino").value.trim();
-              google.script.run
-                .withSuccessHandler(function (estimado) {
-                  html += `<div class="mensaje-info" style="margin-top:10px;">${estimado.mensaje}</div>`;
-                  html += `
-                    <div style="text-align:center; margin-top: 15px;">
-                      <button onclick="comprimir()" style="background-color:#6d4c41;">
-                        💾 Comprimir carpeta destino en ZIP(s)
-                      </button>
-                    </div>
-                  `;
-                  document.getElementById("resultado").innerHTML = html;
-                })
-                .calcularEstimacionCompresion(nombreDestino);
+            if (res.includes("✅ Todo coincide")) { 
+              agregarBotonesPostProceso(null, null, datos.nombreDestino, true); // ID y URL de log no son cruciales para solo comprimir
             } else {
-              document.getElementById("resultado").innerHTML = html;
+              deshabilitarBotones(false); // Si no coincide, habilitar botones para que el usuario pueda re-copiar o limpiar
             }
-
+          })
+          .withFailureHandler(function(err){
+            mostrarSpinner(false);
+            deshabilitarBotones(false);
+            mostrarResultado(`<div class="mensaje-error">Error al verificar: ${err.message}</div>`);
           })
           .verificarIntegridad(datos);
       }
@@ -224,62 +539,57 @@
       function limpiar() {
         const datos = {
           idCarpeta: document.getElementById("idCarpeta").value.trim(),
-          nombreDestino: document.getElementById("nombreDestino").value.trim()
+          nombreDestino: document.getElementById("nombreDestino").value.trim() || nombreDestinoGlobal
         };
+        nombreDestinoGlobal = datos.nombreDestino;
 
         if (!datos.idCarpeta || !datos.nombreDestino) {
-          document.getElementById("resultado").innerHTML = "<div class='mensaje-error'>Introduce el ID de carpeta y nombre destino para limpiar.</div>";
+          mostrarResultado("<div class='mensaje-error'>Introduce el ID de carpeta y nombre destino para limpiar.</div>");
           return;
         }
 
-        if (!confirm("⚠ ¿Estás seguro de que deseas eliminar los elementos sobrantes del destino?")) {
+        if (!confirm("⚠️ ¿Estás seguro de que deseas eliminar los elementos sobrantes del destino? Esta acción no se puede deshacer.")) {
           return;
         }
 
-        document.getElementById("spinner").style.display = "block";
-        document.getElementById("resultado").textContent = "Limpiando destino...";
+        mostrarSpinner(true);
+        deshabilitarBotones(true);
+        document.getElementById("estadoProgreso").innerHTML = "";
+        mostrarResultado("🧹 Limpiando destino...");
 
         google.script.run
           .withSuccessHandler(function (res) {
-            document.getElementById("spinner").style.display = "none";
-
+            mostrarSpinner(false);
+            deshabilitarBotones(false);
             let claseResultado = res.includes("✅") ? "mensaje-ok" :
                                  res.includes("❌") ? "mensaje-error" :
                                  "mensaje-aviso";
-
-            document.getElementById("resultado").innerHTML = `<div class="${claseResultado}">${res}</div>`;
+            mostrarResultado(`<div class="${claseResultado}">${res}</div>`);
+          })
+           .withFailureHandler(function(err){
+            mostrarSpinner(false);
+            deshabilitarBotones(false);
+            mostrarResultado(`<div class="mensaje-error">Error al limpiar: ${err.message}</div>`);
           })
           .limpiarDestino(datos);
       }
 
-      function comprimir() {
-        const nombreDestino = document.getElementById("nombreDestino").value.trim();
-
-        if (!nombreDestino) {
-          document.getElementById("resultado").innerHTML = "<div class='mensaje-error'>Falta el nombre de la carpeta destino.</div>";
+      function comprimir(nombreDestino) { 
+        const dest = nombreDestino || nombreDestinoGlobal;
+        if (!dest) {
+          mostrarResultado("<div class='mensaje-error'>Falta el nombre de la carpeta destino para comprimir.</div>");
           return;
         }
 
-        const datos = {
-          idCarpeta: document.getElementById("idCarpeta").value.trim(),
-          nombreDestino: nombreDestino
-        };
-
-        document.getElementById("spinner").style.display = "block";
-        document.getElementById("resultado").innerHTML = "Comprimiendo carpeta...";
-
-        // 1º: encontrar el ID de la carpeta de destino
-        google.script.run.withSuccessHandler(function (res) {
-          if (!res || !res.idDestino) {
-            document.getElementById("spinner").style.display = "none";
-            document.getElementById("resultado").innerHTML = "<div class='mensaje-error'>No se pudo localizar la carpeta destino para comprimir.</div>";
-            return;
-          }
-
-          // 2º: llamar a comprimirCarpetaEnZips con el nombre y el ID
-          google.script.run
+        mostrarSpinner(true);
+        deshabilitarBotones(true); // Deshabilitar botones durante la compresión
+        document.getElementById("estadoProgreso").innerHTML = "";
+        mostrarResultado("🗜️ Comprimiendo carpeta...");
+        
+        google.script.run
             .withSuccessHandler(function (resZip) {
-              document.getElementById("spinner").style.display = "none";
+              mostrarSpinner(false);
+              deshabilitarBotones(false); 
               const claseResultado = resZip.mensaje.includes("✅") ? "mensaje-ok" :
                                     resZip.mensaje.includes("❌") ? "mensaje-error" : "mensaje-aviso";
               
@@ -297,12 +607,14 @@
                   </div>
                 `;
               }
-              document.getElementById("resultado").innerHTML = html;
-
+              mostrarResultado(html);
             })
-            .comprimirCarpetaDestino(nombreDestino);
-
-        }).iniciarCopia({ idCarpeta: datos.idCarpeta, nombreDestino: datos.nombreDestino, modo: "auto" });
+            .withFailureHandler(function(err){
+                mostrarSpinner(false);
+                deshabilitarBotones(false);
+                mostrarResultado(`<div class="mensaje-error">Error al comprimir: ${err.message}</div>`);
+            })
+            .comprimirCarpetaDestino(dest);
       }
 
     </script>
