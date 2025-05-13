@@ -633,12 +633,85 @@
       }
 
       window.onload = function() {
-          mostrarSpinner(false);
-          deshabilitarBotones(false);
-          // Podrías incluso llamar a obtenerEstadoCopia y obtenerEstadoCompresion
-          // para reanudar la visualización si se recarga la página y un proceso estaba activo.
-          // Por simplicidad, no lo añado ahora, pero es una mejora posible.
-      }
+        mostrarSpinner(true);
+        deshabilitarBotones(true); // Deshabilitar botones mientras se verifica el estado
+
+        let checksCompleted = 0;
+        const totalChecks = 2; // Una para el estado de copia, una para el de compresión
+
+        let procesoCopiaActivoRestaurado = false;
+        let procesoCompresionActivoRestaurado = false;
+
+        function finalUICheck() {
+            checksCompleted++;
+            if (checksCompleted === totalChecks) {
+                if (!procesoCopiaActivoRestaurado && !procesoCompresionActivoRestaurado) {
+                    mostrarSpinner(false);
+                    deshabilitarBotones(false); // Habilitar botones si nada está activo
+                    console.log("onload: Ningún proceso activo detectado.");
+                } else {
+                    // Si algún proceso está activo, el spinner ya debería estar visible y
+                    // los botones deshabilitados por las funciones de sondeo.
+                    // Nos aseguramos de que el spinner esté activo si algo se restauró.
+                    mostrarSpinner(true);
+                    deshabilitarBotones(true);
+                }
+            }
+        }
+
+        // 1. Verificar estado de la copia
+        google.script.run
+            .withSuccessHandler(function(estadoCopia) {
+                if (estadoCopia && estadoCopia.procesoActivo) {
+                    procesoCopiaActivoRestaurado = true;
+                    console.log("onload: Proceso de copia activo detectado.");
+                    if (estadoCopia.nombreDestino) {
+                        document.getElementById("nombreDestino").value = estadoCopia.nombreDestino;
+                        nombreDestinoGlobal = estadoCopia.nombreDestino;
+                    }
+                    if (estadoCopia.idOrigen) {
+                        document.getElementById("idCarpeta").value = estadoCopia.idOrigen;
+                        // idCarpetaGlobal = estadoCopia.idOrigen; // Si usas esta variable
+                    }
+                    // Estas funciones deberían manejar el spinner y los botones si el proceso se reanuda
+                    actualizarUIEstado(estadoCopia, estadoCopia.nombreDestino || nombreDestinoGlobal);
+                    iniciarSondeoDeEstado(estadoCopia.nombreDestino || nombreDestinoGlobal);
+                }
+                finalUICheck(); // Marcar esta verificación como completada
+            })
+            .withFailureHandler(function(err) {
+                console.error("onload: Error al obtener estado de copia:", err.message);
+                finalUICheck(); // Marcar también en caso de error para que el contador avance
+            })
+            .obtenerEstadoCopia();
+
+        // 2. Verificar estado de la compresión
+        google.script.run
+            .withSuccessHandler(function(estadoCompresion) {
+                if (estadoCompresion && estadoCompresion.procesoCompresionActivo) {
+                    procesoCompresionActivoRestaurado = true;
+                    console.log("onload: Proceso de compresión activo detectado.");
+                    if (estadoCompresion.nombreCarpetaDestino) {
+                        // Solo actualiza el campo nombreDestino si no fue ya poblado por un proceso de copia activo
+                        // o si está vacío. La compresión podría ser sobre un nombre diferente.
+                        if (!procesoCopiaActivoRestaurado || document.getElementById("nombreDestino").value === "") {
+                          document.getElementById("nombreDestino").value = estadoCompresion.nombreCarpetaDestino;
+                        }
+                        // Actualizar nombreDestinoGlobal si la compresión está activa y es el proceso más relevante
+                        nombreDestinoGlobal = estadoCompresion.nombreCarpetaDestino;
+                    }
+                    // Estas funciones deberían manejar el spinner y los botones si el proceso se reanuda
+                    actualizarUIEstadoCompresion(estadoCompresion, estadoCompresion.nombreCarpetaDestino || nombreDestinoGlobal);
+                    iniciarSondeoEstadoCompresion(estadoCompresion.nombreCarpetaDestino || nombreDestinoGlobal);
+                }
+                finalUICheck(); // Marcar esta verificación como completada
+            })
+            .withFailureHandler(function(err) {
+                console.error("onload: Error al obtener estado de compresión:", err.message);
+                finalUICheck(); // Marcar también en caso de error
+            })
+            .obtenerEstadoCompresion();
+    }
 
     </script>
   </body>

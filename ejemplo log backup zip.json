@@ -1,9 +1,9 @@
 {
-  "__fechaInicio": "2025-05-13T17:03:06.154Z",
+  "__fechaInicio": "2025-05-13T19:00:09.508Z",
   "__nombreCarpetaDestino": "Copia de Mis clases",
   "__idCarpetaDestino": "1IRzX5Kt8djnQSvHzXTdjPNhGx8lf6y4N",
   "__idCarpetaZips": "1udnwoDZXvS4zuURDcKVO6byP2aR0TsGq",
-  "__baseNombreZip": "backup_Copia_de_Mis_clases_2025-05-13_19-03",
+  "__baseNombreZip": "backup_Copia_de_Mis_clases_2025-05-13_21-00",
   "__estado_compresion": "completado_ok",
   "__progreso": {
     "totalArchivosAComprimir": 13,
@@ -149,8 +149,8 @@
   "__archivosInfoParaZipActual": [],
   "__zipsGenerados": [
     {
-      "nombreZip": "backup_Copia_de_Mis_clases_2025-05-13_19-03_part1_of_1.zip",
-      "url": "https://drive.google.com/file/d/1z5Fv5QzGGmo_kjqNObMYb4-9egwNEfgg/view?usp=drivesdk",
+      "nombreZip": "backup_Copia_de_Mis_clases_2025-05-13_21-00_part1_of_1.zip",
+      "url": "https://drive.google.com/file/d/1IAA6IQ1E9eyGO9eHLGHjqaOfwrhuH0_u/view?usp=drivesdk",
       "archivosIncluidos": [
         "myProject.zip",
         "CyR/ESO3A- clones.sb3",

@@ -4,13 +4,14 @@ const TRIGGER_DELAY_MS = 50 * 1000; // 50 segundos
 const MAX_INTENTOS_POR_TAREA = 3;
 
 // Claves para PropertiesService
-const PS_KEYS = {
+const PS_KEYS_COPIA = {
   BATCH_ACTIVE: 'BATCH_PROCESS_ACTIVE',
   LOG_FILENAME: 'BATCH_LOG_FILENAME',
   TASK_INDEX: 'BATCH_CURRENT_TASK_INDEX',
   TRIGGER_ID: 'BATCH_CURRENT_TRIGGER_ID',
   DESTINATION_FOLDER_ID: 'BATCH_DESTINATION_FOLDER_ID', // ID de la carpeta destino raíz
-  SOURCE_FOLDER_ID: 'BATCH_SOURCE_FOLDER_ID' // ID de la carpeta origen raíz
+  SOURCE_FOLDER_ID: 'BATCH_SOURCE_FOLDER_ID', // ID de la carpeta origen raíz
+  TARGET_FOLDER_NAME_COPIA: 'BATCH_TARGET_FOLDER_NAME'
 };
 
 function doGet() {
@@ -51,8 +52,8 @@ function iniciarCopiaPorLotes(datos) {
     }
     
     const idCarpetaDestino = carpetaDestino.getId();
-    PropertiesService.getUserProperties().setProperty(PS_KEYS.DESTINATION_FOLDER_ID, idCarpetaDestino);
-    PropertiesService.getUserProperties().setProperty(PS_KEYS.SOURCE_FOLDER_ID, idOrigen);
+    PropertiesService.getUserProperties().setProperty(PS_KEYS_COPIA.DESTINATION_FOLDER_ID, idCarpetaDestino);
+    PropertiesService.getUserProperties().setProperty(PS_KEYS_COPIA.SOURCE_FOLDER_ID, idOrigen);
 
     // Cargar el registro más reciente si existe para esta carpeta destino
     let dataRegistro = cargarRegistro(nombreDestino);
@@ -111,7 +112,7 @@ function iniciarCopiaPorLotes(datos) {
       registro.__progreso.mensajeActual = "No hay tareas pendientes. Todo parece estar sincronizado.";
       const nombreArchivoRegistroFinal = generarNombreRegistro(nombreDestino);
       guardarRegistro(registro, nombreArchivoRegistroFinal);
-      PropertiesService.getUserProperties().setProperty(PS_KEYS.LOG_FILENAME, nombreArchivoRegistroFinal);
+      PropertiesService.getUserProperties().setProperty(PS_KEYS_COPIA.LOG_FILENAME, nombreArchivoRegistroFinal);
       limpiarPropiedadesBatch(); // No hay nada que hacer por lotes
 
       return {
@@ -131,9 +132,12 @@ function iniciarCopiaPorLotes(datos) {
     // Configurar PropertiesService para el proceso por lotes
     const userProps = PropertiesService.getUserProperties();
     userProps.setProperties({
-      [PS_KEYS.BATCH_ACTIVE]: 'true',
-      [PS_KEYS.LOG_FILENAME]: nombreArchivoRegistro,
-      [PS_KEYS.TASK_INDEX]: '0'
+      [PS_KEYS_COPIA.BATCH_ACTIVE]: 'true',
+      [PS_KEYS_COPIA.LOG_FILENAME]: nombreArchivoRegistro,
+      [PS_KEYS_COPIA.TASK_INDEX]: '0',
+      [PS_KEYS_COPIA.DESTINATION_FOLDER_ID]: idCarpetaDestino, 
+      [PS_KEYS_COPIA.SOURCE_FOLDER_ID]: idOrigen,
+      [PS_KEYS_COPIA.TARGET_FOLDER_NAME_COPIA]: nombreDestino
     });
 
     // Crear el primer trigger
@@ -176,7 +180,7 @@ function procesarLoteTareas_triggered() {
     } catch (e) {
       Logger.log(`Error crítico en procesarLoteTareas_triggered: ${e.stack}`);
       const userProps = PropertiesService.getUserProperties();
-      const logFileName = userProps.getProperty(PS_KEYS.LOG_FILENAME);
+      const logFileName = userProps.getProperty(PS_KEYS_COPIA.LOG_FILENAME);
       if (logFileName) {
         try {
             let registro = JSON.parse(obtenerOCrearCarpeta(NOMBRE_CARPETA_INFORMES).getFilesByName(logFileName).next().getBlob().getDataAsString());
@@ -204,16 +208,16 @@ function procesarLoteTareas_triggered() {
  */
 function procesarLoteTareas() {
   const userProps = PropertiesService.getUserProperties();
-  if (userProps.getProperty(PS_KEYS.BATCH_ACTIVE) !== 'true') {
+  if (userProps.getProperty(PS_KEYS_COPIA.BATCH_ACTIVE) !== 'true') {
     Logger.log("Proceso por lotes no activo. Deteniendo.");
     borrarTriggerActualPorNombre('procesarLoteTareas_triggered');
     return;
   }
 
-  const logFileName = userProps.getProperty(PS_KEYS.LOG_FILENAME);
+  const logFileName = userProps.getProperty(PS_KEYS_COPIA.LOG_FILENAME);
   // Este es el índice de la primera tarea que este lote intentará procesar.
-  let globalTaskPointer = parseInt(userProps.getProperty(PS_KEYS.TASK_INDEX) || '0');
-  const idCarpetaDestinoRaiz = userProps.getProperty(PS_KEYS.DESTINATION_FOLDER_ID); // Usado si rutaPadreDestinoLogKey es la raíz
+  let globalTaskPointer = parseInt(userProps.getProperty(PS_KEYS_COPIA.TASK_INDEX) || '0');
+  const idCarpetaDestinoRaiz = userProps.getProperty(PS_KEYS_COPIA.DESTINATION_FOLDER_ID); // Usado si rutaPadreDestinoLogKey es la raíz
 
   if (!logFileName || !idCarpetaDestinoRaiz) {
     Logger.log("Faltan propiedades esenciales (LOG_FILENAME o DESTINATION_FOLDER_ID). Deteniendo proceso.");
@@ -328,7 +332,7 @@ function procesarLoteTareas() {
     }
   } // Fin del bucle for que procesa el LOTE_TAMAÑO
   
-  userProps.setProperty(PS_KEYS.TASK_INDEX, globalTaskPointer.toString());
+  userProps.setProperty(PS_KEYS_COPIA.TASK_INDEX, globalTaskPointer.toString());
   registro.__fecha = new Date().toISOString();
 
   try {
@@ -676,13 +680,13 @@ function crearSiguienteTrigger(nombreFuncionTrigger) {
     .timeBased()
     .after(TRIGGER_DELAY_MS)
     .create();
-  PropertiesService.getUserProperties().setProperty(PS_KEYS.TRIGGER_ID, trigger.getUniqueId());
+  PropertiesService.getUserProperties().setProperty(PS_KEYS_COPIA.TRIGGER_ID, trigger.getUniqueId());
   Logger.log(`Trigger creado con ID: ${trigger.getUniqueId()} para ejecutar ${nombreFuncionTrigger} en ${TRIGGER_DELAY_MS / 1000}s.`);
 }
 
 function borrarTriggerActualPorNombre(nombreFuncionTrigger) {
   const userProps = PropertiesService.getUserProperties();
-  const triggerIdActual = userProps.getProperty(PS_KEYS.TRIGGER_ID);
+  const triggerIdActual = userProps.getProperty(PS_KEYS_COPIA.TRIGGER_ID);
 
   const projectTriggers = ScriptApp.getProjectTriggers();
   let borrado = false;
@@ -710,17 +714,18 @@ function borrarTriggerActualPorNombre(nombreFuncionTrigger) {
       }
     }
   }
-  userProps.deleteProperty(PS_KEYS.TRIGGER_ID); // Limpiar el ID de la propiedad
+  userProps.deleteProperty(PS_KEYS_COPIA.TRIGGER_ID); // Limpiar el ID de la propiedad
 }
 
 function limpiarPropiedadesBatch() {
   const userProps = PropertiesService.getUserProperties();
-  userProps.deleteProperty(PS_KEYS.BATCH_ACTIVE);
-  userProps.deleteProperty(PS_KEYS.LOG_FILENAME);
-  userProps.deleteProperty(PS_KEYS.TASK_INDEX);
-  userProps.deleteProperty(PS_KEYS.TRIGGER_ID); // Asegurarse de limpiar el ID del trigger
-  userProps.deleteProperty(PS_KEYS.DESTINATION_FOLDER_ID);
-  userProps.deleteProperty(PS_KEYS.SOURCE_FOLDER_ID);
+  userProps.deleteProperty(PS_KEYS_COPIA.BATCH_ACTIVE);
+  userProps.deleteProperty(PS_KEYS_COPIA.LOG_FILENAME);
+  userProps.deleteProperty(PS_KEYS_COPIA.TASK_INDEX);
+  userProps.deleteProperty(PS_KEYS_COPIA.TRIGGER_ID); 
+  userProps.deleteProperty(PS_KEYS_COPIA.DESTINATION_FOLDER_ID);
+  userProps.deleteProperty(PS_KEYS_COPIA.SOURCE_FOLDER_ID);
+  userProps.deleteProperty(PS_KEYS_COPIA.TARGET_FOLDER_NAME_COPIA);
   Logger.log("Propiedades de usuario para el proceso por lotes limpiadas.");
 }
 
@@ -730,9 +735,12 @@ function limpiarPropiedadesBatch() {
 // ==========================================================================
 function obtenerEstadoCopia() {
   const userProps = PropertiesService.getUserProperties();
-  const batchActivo = userProps.getProperty(PS_KEYS.BATCH_ACTIVE) === 'true';
-  const logFileName = userProps.getProperty(PS_KEYS.LOG_FILENAME);
-  const idDestinoActual = userProps.getProperty(PS_KEYS.DESTINATION_FOLDER_ID); // Obtenerlo siempre
+  const batchActivo = userProps.getProperty(PS_KEYS_COPIA.BATCH_ACTIVE) === 'true';
+  const logFileName = userProps.getProperty(PS_KEYS_COPIA.LOG_FILENAME);
+  const idDestinoActual = userProps.getProperty(PS_KEYS_COPIA.DESTINATION_FOLDER_ID); 
+  const nombreDestinoCopia = userProps.getProperty(PS_KEYS_COPIA.TARGET_FOLDER_NAME_COPIA);
+  const idOrigenCopia = userProps.getProperty(PS_KEYS_COPIA.SOURCE_FOLDER_ID);
+
 
 
   if (!batchActivo && !logFileName) { // Ni activo, ni un log reciente de un proceso
@@ -763,6 +771,9 @@ function obtenerEstadoCopia() {
         mensaje: registro.__progreso?.mensajeActual || "Consultando estado...",
         progreso: registro.__progreso,
         estadoGeneral: registro.__estado_proceso,
+        idOrigen: idOrigenCopia,
+        nombreDestino: nombreDestinoCopia,
+        idDestino: idDestinoActual,
         totalTareas: registro.__progreso?.totalTareas || 0,
         tareasCompletadas: registro.__progreso?.tareasCompletadas || 0,
         errores: registro.__errores,
@@ -773,14 +784,16 @@ function obtenerEstadoCopia() {
       if (batchActivo) {
           return { 
             procesoActivo: batchActivo,
-        mensaje: registro.__progreso?.mensajeActual || (batchActivo ? "Consultando estado..." : "Proceso finalizado."),
-        progreso: registro.__progreso,
-        estadoGeneral: registro.__estado_proceso,
-        totalTareas: registro.__progreso?.totalTareas || 0,
-        tareasCompletadas: registro.__progreso?.tareasCompletadas || 0,
-        errores: registro.__errores,
-        urlRegistro: urlReg, // Devolver siempre la URL del log actual si existe
-        idDestino: idDestinoActual // Devolver siempre el ID del destino si existe
+            mensaje: registro.__progreso?.mensajeActual || (batchActivo ? "Consultando estado..." : "Proceso finalizado."),
+            progreso: registro.__progreso,
+            estadoGeneral: registro.__estado_proceso,
+            idOrigen: idOrigenCopia,
+            nombreDestino: nombreDestinoCopia,
+            totalTareas: registro.__progreso?.totalTareas || 0,
+            tareasCompletadas: registro.__progreso?.tareasCompletadas || 0,
+            errores: registro.__errores,
+            urlRegistro: urlReg, // Devolver siempre la URL del log actual si existe
+            idDestino: idDestinoActual // Devolver siempre el ID del destino si existe
           };
       } else { // Proceso no activo, y el log que teníamos registrado ya no está.
           return { procesoActivo: false, mensaje: "No se encontró información del último proceso.", progreso: null, urlRegistro: null };
@@ -1279,7 +1292,7 @@ const PS_KEYS_COMPRESS = {
   BATCH_ACTIVE: 'COMPRESS_BATCH_PROCESS_ACTIVE',
   LOG_FILENAME: 'COMPRESS_BATCH_LOG_FILENAME',
   TRIGGER_ID: 'COMPRESS_BATCH_CURRENT_TRIGGER_ID',
-  // El resto del estado se manejará principalmente en el archivo de log de compresión
+  LAST_TARGET_NAME: 'COMPRESS_LAST_TARGET_NAME'
 };
 
 // ==========================================================================
@@ -1373,6 +1386,7 @@ function iniciarCompresionPorLotes(nombreDestino) {
     userProps.setProperties({
       [PS_KEYS_COMPRESS.BATCH_ACTIVE]: 'true',
       [PS_KEYS_COMPRESS.LOG_FILENAME]: nombreLogCompresion,
+      [PS_KEYS_COMPRESS.LAST_TARGET_NAME]: nombreDestino
     });
 
     // 5. Crear primer trigger
@@ -1648,69 +1662,148 @@ function finalizarYGuardarZipActual(log, archivosInfoParaEsteZip, logFileName) {
 }
 
 /**
- * Obtiene el estado actual del proceso de compresión.
- * Callable desde el HTML.
+ * Carga el JSON del último archivo de log de compresión encontrado para un nombreDestino específico.
+ * @param {string} nombreDestinoOriginal El nombre de la carpeta destino cuya compresión se registró.
+ * @return {object|null} Un objeto { logJson: object, logFile: File } o null si no se encuentra.
  */
-function obtenerEstadoCompresion() {
+function cargarUltimoLogCompresion(nombreDestinoOriginal) {
+  try {
+    if (!nombreDestinoOriginal || nombreDestinoOriginal.trim() === "") {
+        Logger.log("COMPRESION (cargarUltimoLogCompresion): nombreDestinoOriginal no proporcionado.");
+        return null;
+    }
+    Logger.log(`COMPRESION (cargarUltimoLogCompresion): Buscando último log para nombreDestinoOriginal: "${nombreDestinoOriginal}"`);
+    const carpetaInformes = obtenerOCrearCarpeta(NOMBRE_CARPETA_INFORMES); // Tu función existente
+    const archivos = carpetaInformes.getFiles();
+    let ultimoArchivoLog = null;
+    let ultimaFechaModificacion = 0;
+
+    const nombreDestinoLimpiado = nombreDestinoOriginal.replace(/[^\w\d-_]/g, '_');
+    // El patrón de los logs de compresión es "log_compresion_backup_NOMBRE-DESTINO-LIMPIO_FECHA.json"
+    const prefijoLog = `log_compresion_backup_${nombreDestinoLimpiado}`;
+    Logger.log(`COMPRESION (cargarUltimoLogCompresion): Buscando logs con prefijo: ${prefijoLog}`);
+
+    let archivosCoincidentes = 0;
+    let nombresVerificados = [];
+    while (archivos.hasNext()) {
+      const archivo = archivos.next();
+      const nombreArchivo = archivo.getName();
+      nombresVerificados.push(nombreArchivo);
+      if (nombreArchivo.startsWith(prefijoLog) && nombreArchivo.endsWith('.json')) {
+        archivosCoincidentes++;
+        Logger.log(`COMPRESION (cargarUltimoLogCompresion): Archivo "${nombreArchivo}" COINCIDE con prefijo.`);
+        const fechaMod = archivo.getLastUpdated().getTime();
+        if (fechaMod > ultimaFechaModificacion) {
+          ultimaFechaModificacion = fechaMod;
+          ultimoArchivoLog = archivo;
+          Logger.log(`COMPRESION (cargarUltimoLogCompresion): Nuevo candidato para último log: ${nombreArchivo} (FechaMod: ${new Date(fechaMod).toISOString()})`);
+        }
+      }
+    }
+    if (archivosCoincidentes === 0) {
+        Logger.log(`COMPRESION (cargarUltimoLogCompresion): No se encontraron archivos coincidentes con el prefijo. Archivos verificados en la carpeta '${NOMBRE_CARPETA_INFORMES}': ${nombresVerificados.join(', ')}`);
+    }
+    Logger.log(`COMPRESION (cargarUltimoLogCompresion): Total archivos coincidentes con prefijo: ${archivosCoincidentes}`);
+
+    if (ultimoArchivoLog) {
+      Logger.log(`COMPRESION (cargarUltimoLogCompresion): Último log encontrado: ${ultimoArchivoLog.getName()}`);
+      const logContent = ultimoArchivoLog.getBlob().getDataAsString();
+      const parsedLog = JSON.parse(logContent);
+      Logger.log(`COMPRESION (cargarUltimoLogCompresion): Contenido del log cargado. Estado: ${parsedLog.__estado_compresion}, Mensaje: ${parsedLog.__progreso ? parsedLog.__progreso.mensajeActual : 'N/A'}`);
+      return { logJson: parsedLog, logFile: ultimoArchivoLog };
+    }
+    Logger.log(`COMPRESION (cargarUltimoLogCompresion): No se encontró un log de compresión para "${nombreDestinoOriginal}" con prefijo "${prefijoLog}".`);
+    return null;
+  } catch (e) {
+    Logger.log(`Error en cargarUltimoLogCompresion para "${nombreDestinoOriginal}": ${e.message}\n${e.stack}`);
+    return null;
+  }
+}
+
+/**
+ * Obtiene el estado actual del proceso de compresión.
+ * Es llamado por el HTML para el sondeo.
+ * @param {string} nombreDestino El nombre de la carpeta destino que se está consultando (puede ser null si se usa LAST_TARGET_NAME).
+ * @return {object} El estado del proceso de compresión.
+ */
+function obtenerEstadoCompresion(nombreDestino) { // nombreDestino es pasado desde HTML
   const userProps = PropertiesService.getUserProperties();
   const batchActivo = userProps.getProperty(PS_KEYS_COMPRESS.BATCH_ACTIVE) === 'true';
-  const logFileName = userProps.getProperty(PS_KEYS_COMPRESS.LOG_FILENAME);
+  const logFileNameFromProps = userProps.getProperty(PS_KEYS_COMPRESS.LOG_FILENAME);
+  const lastTargetNameFromProps = userProps.getProperty(PS_KEYS_COMPRESS.LAST_TARGET_NAME); // Nueva propiedad
 
-  if (!batchActivo && !logFileName) {
-    return {
-      procesoCompresionActivo: false,
-      mensaje: "No hay ningún proceso de compresión activo o información reciente.",
-      progresoCompresion: null,
-      zipsGenerados: [],
-      urlLogCompresion: null,
-      urlCarpetaZips: null
-    };
-  }
-  
-  if (!logFileName) {
-      return { procesoCompresionActivo: batchActivo, mensaje: "Proceso de compresión activo pero sin archivo de log configurado.", progresoCompresion: null, zipsGenerados: [], urlLogCompresion: null, urlCarpetaZips: null};
-  }
+  Logger.log(`COMPRESION (obtenerEstado): batchActivo=${batchActivo}, logFileNameFromProps="${logFileNameFromProps}", nombreDestinoParam="${nombreDestino}", lastTargetNameFromProps="${lastTargetNameFromProps}"`);
 
-  try {
-    const log = cargarArchivoLogCompresion(logFileName);
-    if (log) {
-      const carpetaInformes = obtenerOCrearCarpeta(NOMBRE_CARPETA_INFORMES); // Para URL del log
-      const logFile = carpetaInformes.getFilesByName(logFileName).hasNext() ? carpetaInformes.getFilesByName(logFileName).next() : null;
-      const urlCarpetaZipsFinal = log.__idCarpetaZips ? DriveApp.getFolderById(log.__idCarpetaZips).getUrl() : null;
+  let logData = null;
+  let nombreDestinoParaBusqueda = nombreDestino || lastTargetNameFromProps;
 
-      return {
-        procesoCompresionActivo: batchActivo,
-        mensaje: log.__progreso?.mensajeActual || (batchActivo ? "Consultando estado de compresión..." : "Compresión finalizada."),
-        progresoCompresion: log.__progreso,
-        estadoGeneralCompresion: log.__estado_compresion,
-        zipsGenerados: log.__zipsGenerados,
-        erroresCompresion: log.__errores,
-        advertenciasCompresion: log.__advertencias,
-        urlLogCompresion: logFile ? logFile.getUrl() : null,
-        urlCarpetaZips: urlCarpetaZipsFinal
-      };
-    } else {
-      return { 
-          procesoCompresionActivo: batchActivo, 
-          mensaje: "Error: No se pudo cargar el archivo de log de compresión.", 
-          progresoCompresion: null, 
-          zipsGenerados: [], 
-          urlLogCompresion: null,
-          urlCarpetaZips: null
-      };
+  if (batchActivo && logFileNameFromProps) {
+    Logger.log(`COMPRESION (obtenerEstado): Proceso activo detectado en Properties. Log: ${logFileNameFromProps}`);
+    try {
+        const carpetaInformes = obtenerOCrearCarpeta(NOMBRE_CARPETA_INFORMES);
+        const archivosLogProps = carpetaInformes.getFilesByName(logFileNameFromProps);
+        if (archivosLogProps.hasNext()) {
+            const logFileObj = archivosLogProps.next();
+            logData = { logJson: JSON.parse(logFileObj.getBlob().getDataAsString()), logFile: logFileObj };
+            Logger.log(`COMPRESION (obtenerEstado): Log activo "${logFileNameFromProps}" cargado correctamente.`);
+        } else {
+            Logger.log(`COMPRESION (obtenerEstado): Log activo "${logFileNameFromProps}" (de Properties) NO encontrado en Drive. Intentando fallback con nombreDestinoParaBusqueda: "${nombreDestinoParaBusqueda}".`);
+            if (nombreDestinoParaBusqueda) {
+                 logData = cargarUltimoLogCompresion(nombreDestinoParaBusqueda);
+            }
+        }
+    } catch (e) {
+        Logger.log(`COMPRESION (obtenerEstado): Error cargando log activo "${logFileNameFromProps}": ${e.message}. Intentando fallback con nombreDestinoParaBusqueda: "${nombreDestinoParaBusqueda}".`);
+        if (nombreDestinoParaBusqueda) {
+            logData = cargarUltimoLogCompresion(nombreDestinoParaBusqueda);
+        }
     }
-  } catch (e) {
-    Logger.log("Error en obtenerEstadoCompresion: " + e.stack);
-    return {
+  } else {
+    Logger.log(`COMPRESION (obtenerEstado): Proceso no activo en Properties o falta logFileNameFromProps. Buscando último log para nombreDestinoParaBusqueda: "${nombreDestinoParaBusqueda}"`);
+    if (nombreDestinoParaBusqueda) {
+      logData = cargarUltimoLogCompresion(nombreDestinoParaBusqueda);
+      Logger.log(`COMPRESION (obtenerEstado): Resultado de cargarUltimoLogCompresion para "${nombreDestinoParaBusqueda}": ${logData ? 'Log encontrado (' + logData.logFile.getName() + ')' : 'Ningún log encontrado'}`);
+    } else {
+      Logger.log("COMPRESION (obtenerEstado): nombreDestinoParaBusqueda es nulo o vacío, no se puede buscar último log.");
+    }
+  }
+
+  if (logData && logData.logJson) {
+    const logJson = logData.logJson;
+    const logFileObj = logData.logFile;
+    const urlCarpetaZipsFinal = (logJson.__idCarpetaZips && DriveApp.getFolderById(logJson.__idCarpetaZips)) 
+                                ? DriveApp.getFolderById(logJson.__idCarpetaZips).getUrl() 
+                                : null;
+    Logger.log(`COMPRESION (obtenerEstado): Devolviendo datos del log: ${logFileObj ? logFileObj.getName() : 'N/A'}, Estado General: ${logJson.__estado_compresion}`);
+    return { /* ... (mismo objeto de retorno que antes) ... */
       procesoCompresionActivo: batchActivo,
-      mensaje: "Error al obtener el estado de la compresión: " + e.message,
+      mensaje: logJson.__progreso?.mensajeActual || (batchActivo ? "Consultando estado de compresión..." : "Estado final de compresión recuperado."),
+      progresoCompresion: logJson.__progreso,
+      estadoGeneralCompresion: logJson.__estado_compresion,
+      nombreCarpetaDestino: logJson.__nombreCarpetaDestino || nombreDestinoParaBusqueda,
+      zipsGenerados: logJson.__zipsGenerados || [],
+      erroresCompresion: logJson.__errores || [],
+      advertenciasCompresion: logJson.__advertencias || [],
+      urlLogCompresion: logFileObj ? logFileObj.getUrl() : null,
+      urlCarpetaZips: urlCarpetaZipsFinal
+    };
+  } else {
+    Logger.log(`COMPRESION (obtenerEstado): No se encontró logData válido. Devolviendo estado genérico de 'no proceso'. nombreDestinoParaBusqueda era: "${nombreDestinoParaBusqueda}"`);
+    return { /* ... (mismo objeto de retorno para "No hay ningún proceso..." que antes, usando nombreDestinoParaBusqueda en el mensaje) ... */
+      procesoCompresionActivo: false, 
+      mensaje: `No hay ningún proceso de compresión activo o información reciente para "${nombreDestinoParaBusqueda || "el destino especificado"}".`,
       progresoCompresion: null,
+      nombreCarpetaDestino: nombreDestinoParaBusqueda || null,
       zipsGenerados: [],
+      erroresCompresion: [],
+      advertenciasCompresion: [],
       urlLogCompresion: null,
-      urlCarpetaZips: null
+      urlCarpetaZips: null,
+      estadoGeneralCompresion: "desconocido"
     };
   }
 }
+
 
 // --- Funciones de utilidad para compresión ---
 function limpiarPropiedadesCompresionBatch() {
@@ -1718,6 +1811,7 @@ function limpiarPropiedadesCompresionBatch() {
   userProps.deleteProperty(PS_KEYS_COMPRESS.BATCH_ACTIVE);
   userProps.deleteProperty(PS_KEYS_COMPRESS.LOG_FILENAME);
   userProps.deleteProperty(PS_KEYS_COMPRESS.TRIGGER_ID);
+  // NO BORRAR userProps.deleteProperty(PS_KEYS_COMPRESS.LAST_TARGET_NAME);
   Logger.log("COMPRESION: Propiedades de usuario para compresión por lotes limpiadas.");
 }
 
