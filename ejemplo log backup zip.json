@@ -1,11 +1,174 @@
 {
-    "destino": "Copia de Mis Clases",
-    "fecha": "2025-05-05_00-02",
-    "zips": [
-      "https://drive.google.com/file/d/1q-HsqFA8mAWQcTeBJZcT9wZ0BdtqS240/view?usp=drivesdk"
-    ],
-    "resumen": [
-      "ZIP 1 (11 archivos)"
-    ],
-    "advertencias": []
-  }
+  "__fechaInicio": "2025-05-13T17:03:06.154Z",
+  "__nombreCarpetaDestino": "Copia de Mis clases",
+  "__idCarpetaDestino": "1IRzX5Kt8djnQSvHzXTdjPNhGx8lf6y4N",
+  "__idCarpetaZips": "1udnwoDZXvS4zuURDcKVO6byP2aR0TsGq",
+  "__baseNombreZip": "backup_Copia_de_Mis_clases_2025-05-13_19-03",
+  "__estado_compresion": "completado_ok",
+  "__progreso": {
+    "totalArchivosAComprimir": 13,
+    "archivosConvertidosABlob": 13,
+    "archivosEnZipActual": 0,
+    "tamañoZipActualBytes": 0,
+    "zipPartsCreados": 1,
+    "zipPartsEstimados": 1,
+    "mensajeActual": "Compresión finalizada. 1 ZIP(s) creados."
+  },
+  "__listaCompletaArchivos": [
+    {
+      "id": "1ta6EcKxcFJcrC_aV8jEhIMlMsSWv12da",
+      "rutaRelativa": "myProject.zip",
+      "size": 922,
+      "nombre": "myProject.zip",
+      "esGDoc": false,
+      "mimeOriginal": "application/zip",
+      "mimeExportar": null,
+      "extensionExportar": ""
+    },
+    {
+      "id": "1rMwFBTucVfqJ8NW1CG9vQT2Qu1ed7I_6",
+      "rutaRelativa": "CyR/ESO3A- clones.sb3",
+      "size": 64910,
+      "nombre": "ESO3A- clones.sb3",
+      "esGDoc": false,
+      "mimeOriginal": "application/x-zip",
+      "mimeExportar": null,
+      "extensionExportar": ""
+    },
+    {
+      "id": "1omI-iEUfMCm8dQHyBt860Wmgt1woj0Eo",
+      "rutaRelativa": "CyR/ESO3A- clones (1).sb3",
+      "size": 36625,
+      "nombre": "ESO3A- clones (1).sb3",
+      "esGDoc": false,
+      "mimeOriginal": "application/x-zip",
+      "mimeExportar": null,
+      "extensionExportar": ""
+    },
+    {
+      "id": "18XVSe0QGYUsqMxXgsZgS8vyMXb7d6_QKMETsnZ-E1pc",
+      "rutaRelativa": "ej1/Copia de Leeme",
+      "size": 1024,
+      "nombre": "Copia de Leeme",
+      "esGDoc": true,
+      "mimeOriginal": "application/vnd.google-apps.document",
+      "mimeExportar": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "extensionExportar": ".docx"
+    },
+    {
+      "id": "1fD7Zl4bSZhAsYuTWsXoC0di3kJzB-bDAG6ucKzkzCBc",
+      "rutaRelativa": "ej1/Copia de prueba sheets",
+      "size": 1024,
+      "nombre": "Copia de prueba sheets",
+      "esGDoc": true,
+      "mimeOriginal": "application/vnd.google-apps.spreadsheet",
+      "mimeExportar": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      "extensionExportar": ".xlsx"
+    },
+    {
+      "id": "1_ma7NL7lVNl9kaz3DhHiTx213TTVhAF2",
+      "rutaRelativa": "ej1/index.html",
+      "size": 418,
+      "nombre": "index.html",
+      "esGDoc": false,
+      "mimeOriginal": "text/html",
+      "mimeExportar": null,
+      "extensionExportar": ""
+    },
+    {
+      "id": "1hQBncIm5ohNwi86P8du_iSLft_90ox8X",
+      "rutaRelativa": "ej1/sketch.js",
+      "size": 128,
+      "nombre": "sketch.js",
+      "esGDoc": false,
+      "mimeOriginal": "text/javascript",
+      "mimeExportar": null,
+      "extensionExportar": ""
+    },
+    {
+      "id": "1R5G6yJz5cEz2Tv4NGf2obQ1DiB2bubMr",
+      "rutaRelativa": "ej1/style.css",
+      "size": 70,
+      "nombre": "style.css",
+      "esGDoc": false,
+      "mimeOriginal": "text/css",
+      "mimeExportar": null,
+      "extensionExportar": ""
+    },
+    {
+      "id": "1CL4w--3JzTjS916mCdVAYnDldGyUi7kYRBvuifiyx10",
+      "rutaRelativa": "ej1/Leeme",
+      "size": 1024,
+      "nombre": "Leeme",
+      "esGDoc": true,
+      "mimeOriginal": "application/vnd.google-apps.document",
+      "mimeExportar": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "extensionExportar": ".docx"
+    },
+    {
+      "id": "12vpw0MSUYC2VJWbJMrpl63D10pUzSJtF311k7I-v3B4",
+      "rutaRelativa": "ej1/prueba sheets",
+      "size": 1024,
+      "nombre": "prueba sheets",
+      "esGDoc": true,
+      "mimeOriginal": "application/vnd.google-apps.spreadsheet",
+      "mimeExportar": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      "extensionExportar": ".xlsx"
+    },
+    {
+      "id": "1SCmqiLQUQOxmp9ZYxr_Rgji6-IDHtYJF",
+      "rutaRelativa": "DIG/4ESOB_Tuto1_2024_12_11_08_49_27.zip",
+      "size": 5212149,
+      "nombre": "4ESOB_Tuto1_2024_12_11_08_49_27.zip",
+      "esGDoc": false,
+      "mimeOriginal": "application/zip",
+      "mimeExportar": null,
+      "extensionExportar": ""
+    },
+    {
+      "id": "14ZCfJHKDWMD3l3ZozIDmyu1ZJjRSQL--",
+      "rutaRelativa": "DIG/4esoC_Tutorial1_2024_12_11_13_19_03.zip",
+      "size": 5412414,
+      "nombre": "4esoC_Tutorial1_2024_12_11_13_19_03.zip",
+      "esGDoc": false,
+      "mimeOriginal": "application/zip",
+      "mimeExportar": null,
+      "extensionExportar": ""
+    },
+    {
+      "id": "1nJiG61FxUN5HWYUw8mJnbjybdbwwHFek",
+      "rutaRelativa": "DIG/4ESOC_Tuto2_-_Get_Started_2024_12_12_11_57_19.zip",
+      "size": 5412822,
+      "nombre": "4ESOC_Tuto2_-_Get_Started_2024_12_12_11_57_19.zip",
+      "esGDoc": false,
+      "mimeOriginal": "application/zip",
+      "mimeExportar": null,
+      "extensionExportar": ""
+    }
+  ],
+  "__archivosInfoParaZipActual": [],
+  "__zipsGenerados": [
+    {
+      "nombreZip": "backup_Copia_de_Mis_clases_2025-05-13_19-03_part1_of_1.zip",
+      "url": "https://drive.google.com/file/d/1z5Fv5QzGGmo_kjqNObMYb4-9egwNEfgg/view?usp=drivesdk",
+      "archivosIncluidos": [
+        "myProject.zip",
+        "CyR/ESO3A- clones.sb3",
+        "CyR/ESO3A- clones (1).sb3",
+        "ej1/Copia de Leeme",
+        "ej1/Copia de prueba sheets",
+        "ej1/index.html",
+        "ej1/sketch.js",
+        "ej1/style.css",
+        "ej1/Leeme",
+        "ej1/prueba sheets",
+        "DIG/4ESOB_Tuto1_2024_12_11_08_49_27.zip",
+        "DIG/4esoC_Tutorial1_2024_12_11_13_19_03.zip",
+        "DIG/4ESOC_Tuto2_-_Get_Started_2024_12_12_11_57_19.zip"
+      ],
+      "tamañoBytes": 2716589
+    }
+  ],
+  "__advertencias": [],
+  "__errores": []
+}

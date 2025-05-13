@@ -1051,6 +1051,12 @@ function obtenerOCrearCarpeta(nombre) {
   return carpetas.hasNext() ? carpetas.next() : DriveApp.createFolder(nombre);
 }
 
+function obtenerOCrearCarpeta(nombre, parentFolder) {
+  const baseFolder = parentFolder || DriveApp.getRootFolder();
+  const carpetas = baseFolder.getFoldersByName(nombre);
+  return carpetas.hasNext() ? carpetas.next() : baseFolder.createFolder(nombre);
+}
+
 function limpiarDestino(datos) {
   try {
     const idOrigen = datos.idCarpeta.trim();
@@ -1182,91 +1188,6 @@ function construirRegistroDesdeDestino(origen, destino, registro, rutaBase) {
 }
 
 /**
- * Comprime una carpeta destino previamente verificada en bloques de hasta 100 MB.
- * Los archivos ZIP se almacenan en una carpeta /Backups ZIP dentro del mismo Drive.
- * Se genera un log en la carpeta de informes con los archivos incluidos en cada ZIP.
- */
-function comprimirCarpetaDestino(nombreDestino) {
-  const carpetaDestino = DriveApp.getFoldersByName(nombreDestino);
-  if (!carpetaDestino.hasNext()) throw new Error(`No se encuentra la carpeta destino: ${nombreDestino}`);
-  const carpeta = carpetaDestino.next();
-
-  const parent = carpeta.getParents().hasNext() ? carpeta.getParents().next() : DriveApp.getRootFolder();
-  const backupsZipFolder = parent.getFoldersByName("Backups ZIP").hasNext()
-    ? parent.getFoldersByName("Backups ZIP").next()
-    : parent.createFolder("Backups ZIP");
-
-  const fecha = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd_HH-mm");
-  const baseNombreZip = `backup_${nombreDestino.replace(/[^\w\d-_]/g, '_')}_${fecha}`;
-
-  const archivos = obtenerTodosLosArchivosConRuta(carpeta, "");
-  const BLOQUE_MB = 100;
-  const BLOQUE_BYTES = BLOQUE_MB * 1024 * 1024;
-
-  // Paso previo: estimar número de bloques
-  let total = 0;
-  let bloquesEstimados = 0;
-  for (const obj of archivos) {
-    const size = obj.file.getSize();
-    total += size;
-    if (total > BLOQUE_BYTES) {
-      bloquesEstimados++;
-      total = size;
-    }
-  }
-  if (total > 0) bloquesEstimados++; // último bloque
-
-  // Ahora hacer compresión real
-  let bloque = [];
-  let numZip = 1;
-  let zipsCreados = [];
-  let resumenLog = [];
-  let advertencias = [];
-  total = 0;
-
-  for (const obj of archivos) {
-    const size = obj.file.getSize();
-    if (total + size > BLOQUE_BYTES && bloque.length > 0) {
-      const nombreZip = `${baseNombreZip}_part${numZip}_of_${bloquesEstimados}.zip`;
-      const zip = crearZipDesdeArchivos(bloque, nombreZip, backupsZipFolder);
-      zipsCreados.push(zip.getUrl());
-      resumenLog.push(`ZIP ${numZip} (${bloque.length} archivos)`);
-      bloque = [];
-      total = 0;
-      numZip++;
-    }
-    bloque.push(obj);
-    total += size;
-  }
-
-  if (bloque.length > 0) {
-    const nombreZip = `${baseNombreZip}_part${numZip}_of_${bloquesEstimados}.zip`;
-    const zip = crearZipDesdeArchivos(bloque, nombreZip, backupsZipFolder, advertencias);
-    zipsCreados.push(zip.getUrl());
-    resumenLog.push(`ZIP ${numZip} (${bloque.length} archivos)`);
-  }
-
-  const log = {
-    destino: nombreDestino,
-    fecha: fecha,
-    zips: zipsCreados,
-    resumen: resumenLog,
-    advertencias: advertencias
-  };
-
-  const nombreLog = `log_zip_${baseNombreZip}.json`;
-  const logFile = guardarRegistro(log, nombreLog);
-
-  return {
-    mensaje: `✅ Se han creado ${zipsCreados.length} archivo(s) ZIP con estructura.`,
-    zips: zipsCreados,
-    urlLog: logFile.getUrl(),
-    carpetaZipsUrl: backupsZipFolder.getUrl()
-  };
-}
-
-
-/**
  * Recorre recursivamente una carpeta y devuelve todos los archivos
  */
 function obtenerTodosLosArchivosConRuta(folder, rutaBase) {
@@ -1346,6 +1267,581 @@ function crearZipDesdeArchivos(archivos, nombreZip, destinoFolder, advertencias)
   return destinoFolder.createFile(zipBlob);
 }
 
+// ==========================================================================
+// CONSTANTES Y CLAVES PARA EL PROCESO DE COMPRESIÓN POR LOTES
+// ==========================================================================
+const LOTE_COMPRESION_MAX_DURACION_MS = 4 * 60 * 1000; // 4 minutos por lote de compresión (para dejar margen)
+const MAX_ARCHIVOS_POR_BLOB_FETCH_EN_LOTE_COMPRESION = 7; // Cuántos archivos intentar convertir a blob por ejecución de trigger
+const NOMBRE_CARPETA_BACKUPS_ZIP = "Backups ZIP"; // Carpeta donde se guardarán los ZIPs
+const MAX_ZIP_PART_SIZE_BYTES = 500 * 1024 * 1024; // 500 MB (Drive tiene un límite de 512MB para Utilities.zip)
+
+const PS_KEYS_COMPRESS = {
+  BATCH_ACTIVE: 'COMPRESS_BATCH_PROCESS_ACTIVE',
+  LOG_FILENAME: 'COMPRESS_BATCH_LOG_FILENAME',
+  TRIGGER_ID: 'COMPRESS_BATCH_CURRENT_TRIGGER_ID',
+  // El resto del estado se manejará principalmente en el archivo de log de compresión
+};
+
+// ==========================================================================
+// FUNCIONES PARA EL PROCESO DE COMPRESIÓN POR LOTES
+// ==========================================================================
+
+/**
+ * Inicia el proceso de compresión por lotes para una carpeta destino.
+ * La llamamos desde el HTML.
+ */
+function iniciarCompresionPorLotes(nombreDestino) {
+  try {
+    limpiarPropiedadesCompresionBatch(); // Limpia cualquier proceso de compresión anterior
+    borrarTriggerCompresionActualPorNombre('procesarLoteCompresion_triggered');
+
+    if (!nombreDestino || nombreDestino.trim() === "") {
+      throw new Error("El nombre de la carpeta destino es requerido.");
+    }
+    nombreDestino = nombreDestino.trim();
+
+    const carpetasDestinoIter = DriveApp.getFoldersByName(nombreDestino);
+    if (!carpetasDestinoIter.hasNext()) {
+      throw new Error(`No se encontró la carpeta destino: "${nombreDestino}".`);
+    }
+    const carpetaDestinoDrive = carpetasDestinoIter.next();
+    const idCarpetaDestino = carpetaDestinoDrive.getId();
+
+    const carpetaPadreDestino = carpetaDestinoDrive.getParents().hasNext() ? carpetaDestinoDrive.getParents().next() : DriveApp.getRootFolder();
+    const backupsZipFolder = obtenerOCrearCarpeta(NOMBRE_CARPETA_BACKUPS_ZIP, carpetaPadreDestino);
+    const idCarpetaZips = backupsZipFolder.getId();
+
+    Logger.log(`Iniciando planificación de compresión para: ${nombreDestino} (ID: ${idCarpetaDestino})`);
+
+    // 1. Obtener lista de todos los archivos con su información para el log
+    const listaArchivosRaw = obtenerTodosLosArchivosConRutaParaCompresion(carpetaDestinoDrive, "");
+    const listaCompletaArchivos = listaArchivosRaw.map(ar => ({
+        id: ar.id,
+        rutaRelativa: ar.rutaRelativa, // Asegúrate que esta ruta sea relativa a la carpetaDestinoDrive
+        size: ar.size,
+        nombre: ar.nombre,
+        esGDoc: ar.esGDoc,
+        mimeOriginal: ar.mimeOriginal,
+        mimeExportar: ar.mimeExportar,
+        extensionExportar: ar.extensionExportar
+    }));
+    
+    Logger.log(`Total archivos encontrados para comprimir: ${listaCompletaArchivos.length}`);
+    if (listaCompletaArchivos.length === 0) {
+        return {
+            mensaje: "ℹ️ No hay archivos en la carpeta destino para comprimir.",
+            compresionPorLotesIniciada: false
+        };
+    }
+
+    // 2. Calcular estimación (ya tienes esta función)
+    const estimacion = calcularEstimacionCompresion(nombreDestino); // Asume que esta función ya existe y funciona
+
+    // 3. Crear log de compresión inicial
+    const fechaInicio = new Date();
+    const baseNombreZip = `backup_${nombreDestino.replace(/[^\w\d-_]/g, '_')}_${Utilities.formatDate(fechaInicio, Session.getScriptTimeZone(), "yyyy-MM-dd_HH-mm")}`;
+    const nombreLogCompresion = `log_compresion_${baseNombreZip}.json`;
+
+    const logCompresion = {
+      __fechaInicio: fechaInicio.toISOString(),
+      __nombreCarpetaDestino: nombreDestino,
+      __idCarpetaDestino: idCarpetaDestino,
+      __idCarpetaZips: idCarpetaZips,
+      __baseNombreZip: baseNombreZip,
+      __estado_compresion: "planificando", // Cambiará a "en_progreso" en el primer lote
+      __progreso: {
+        totalArchivosAComprimir: listaCompletaArchivos.length,
+        archivosConvertidosABlob: 0,
+        archivosEnZipActual: 0,
+        tamañoZipActualBytes: 0,
+        zipPartsCreados: 0,
+        zipPartsEstimados: estimacion.partes, // Usar la estimación
+        mensajeActual: "Planificación de compresión iniciada..."
+      },
+      __listaCompletaArchivos: listaCompletaArchivos,
+      __archivosInfoParaZipActual: [], // Array de {id, rutaRelativa, nombre, size, esGDoc, mimeOriginal, mimeExportar, extensionExportar}
+      __zipsGenerados: [],
+      __advertencias: [],
+      __errores: []
+    };
+    
+    guardarArchivoLogCompresion(logCompresion, nombreLogCompresion);
+    Logger.log(`Log de compresión inicial guardado como: ${nombreLogCompresion}`);
+
+    // 4. Configurar PropertiesService
+    const userProps = PropertiesService.getUserProperties();
+    userProps.setProperties({
+      [PS_KEYS_COMPRESS.BATCH_ACTIVE]: 'true',
+      [PS_KEYS_COMPRESS.LOG_FILENAME]: nombreLogCompresion,
+    });
+
+    // 5. Crear primer trigger
+    crearSiguienteTriggerCompresion('procesarLoteCompresion_triggered');
+
+    return {
+      mensaje: `🚀 Proceso de compresión por lotes iniciado para "${nombreDestino}". ${listaCompletaArchivos.length} archivos en cola. Estimados ${estimacion.partes} ZIP(s). El proceso continuará en segundo plano.`,
+      compresionPorLotesIniciada: true,
+      nombreDestino: nombreDestino, // Para la UI
+      logFileName: nombreLogCompresion // Para la UI
+    };
+
+  } catch (e) {
+    Logger.log(`Error crítico en iniciarCompresionPorLotes: ${e.message}\n${e.stack}`);
+    limpiarPropiedadesCompresionBatch();
+    borrarTriggerCompresionActualPorNombre('procesarLoteCompresion_triggered');
+    return { 
+        mensaje: `❌ Ocurrió un error inesperado al iniciar la compresión: ${e.message}. Revisa los registros del script.`,
+        compresionPorLotesIniciada: false
+    };
+  }
+}
+
+
+/**
+ * Función wrapper para el trigger de compresión.
+ */
+function procesarLoteCompresion_triggered() {
+  const lock = LockService.getUserLock();
+  if (lock.tryLock(30000)) {
+    try {
+      Logger.log("COMPRESION: Procesando lote (triggered)...");
+      procesarLoteCompresion();
+    } catch (e) {
+      Logger.log(`COMPRESION: Error crítico en procesarLoteCompresion_triggered: ${e.message}\n${e.stack}`);
+      const userProps = PropertiesService.getUserProperties();
+      const logFileName = userProps.getProperty(PS_KEYS_COMPRESS.LOG_FILENAME);
+      if (logFileName) {
+        try {
+            let log = cargarArchivoLogCompresion(logFileName);
+            if (log) {
+              log.__estado_compresion = "error_critico";
+              log.__errores.push({timestamp: new Date().toISOString(), archivo: "CRITICO", mensaje: `Error en trigger de compresión: ${e.message}`});
+              log.__progreso.mensajeActual = "Error crítico en el proceso de compresión por lotes.";
+              guardarArchivoLogCompresion(log, logFileName);
+            }
+        } catch (logError) {
+            Logger.log(`COMPRESION: Error al intentar guardar el error crítico en el log de compresión: ${logError.stack}`);
+        }
+      }
+      borrarTriggerCompresionActualPorNombre('procesarLoteCompresion_triggered');
+      limpiarPropiedadesCompresionBatch();
+    } finally {
+      lock.releaseLock();
+    }
+  } else {
+    Logger.log("COMPRESION: No se pudo obtener el bloqueo para procesarLoteCompresion_triggered.");
+  }
+}
+
+/**
+ * Lógica principal para procesar un lote de compresión.
+ */
+function procesarLoteCompresion() {
+  const userProps = PropertiesService.getUserProperties();
+  if (userProps.getProperty(PS_KEYS_COMPRESS.BATCH_ACTIVE) !== 'true') {
+    Logger.log("COMPRESION: Proceso por lotes no activo. Deteniendo.");
+    borrarTriggerCompresionActualPorNombre('procesarLoteCompresion_triggered');
+    return;
+  }
+
+  const logFileName = userProps.getProperty(PS_KEYS_COMPRESS.LOG_FILENAME);
+  if (!logFileName) {
+    Logger.log("COMPRESION: Falta LOG_FILENAME. Deteniendo proceso.");
+    limpiarPropiedadesCompresionBatch();
+    borrarTriggerCompresionActualPorNombre('procesarLoteCompresion_triggered');
+    return;
+  }
+
+  let log = cargarArchivoLogCompresion(logFileName);
+  if (!log) {
+    Logger.log(`COMPRESION: No se pudo cargar el log ${logFileName}. Deteniendo.`);
+    limpiarPropiedadesCompresionBatch();
+    borrarTriggerCompresionActualPorNombre('procesarLoteCompresion_triggered');
+    return;
+  }
+
+  if (["completado_ok", "completado_con_errores", "error_critico"].includes(log.__estado_compresion)) {
+    Logger.log(`COMPRESION: Proceso ya marcado como '${log.__estado_compresion}'. Limpiando.`);
+    limpiarPropiedadesCompresionBatch();
+    borrarTriggerCompresionActualPorNombre('procesarLoteCompresion_triggered');
+    return;
+  }
+
+  log.__estado_compresion = "en_progreso";
+  const tiempoInicioLote = new Date().getTime();
+  let seHizoTrabajoSignificativo = false;
+
+  // Recuperar estado del ZIP actual del log
+  let archivosInfoParaZipActual = log.__archivosInfoParaZipActual || [];
+  let tamañoZipActualBytes = log.__progreso.tamañoZipActualBytes || 0;
+  let currentFileIndex = log.__progreso.archivosConvertidosABlob || 0;
+
+  for (let i = 0; i < MAX_ARCHIVOS_POR_BLOB_FETCH_EN_LOTE_COMPRESION && currentFileIndex < log.__listaCompletaArchivos.length; i++) {
+    if (new Date().getTime() - tiempoInicioLote > LOTE_COMPRESION_MAX_DURACION_MS) {
+      Logger.log("COMPRESION: Límite de tiempo del lote alcanzado al procesar archivos para blob.");
+      break;
+    }
+
+    const archivoInfo = log.__listaCompletaArchivos[currentFileIndex];
+    log.__progreso.mensajeActual = `Preparando archivo ${currentFileIndex + 1}/${log.__progreso.totalArchivosAComprimir}: ${archivoInfo.rutaRelativa}`;
+    Logger.log(`COMPRESION: ${log.__progreso.mensajeActual}`);
+    
+    // Aquí no convertimos a blob aún, solo acumulamos la info del archivo.
+    // La conversión a blob se hará justo antes de crear el ZIP.
+
+    if ((tamañoZipActualBytes + archivoInfo.size > MAX_ZIP_PART_SIZE_BYTES) && archivosInfoParaZipActual.length > 0) {
+      Logger.log(`COMPRESION: ZIP actual (${archivosInfoParaZipActual.length} archivos, ${tamañoZipActualBytes} bytes) lleno o el siguiente archivo lo excede. Finalizando ZIP part ${log.__progreso.zipPartsCreados + 1}.`);
+      finalizarYGuardarZipActual(log, archivosInfoParaZipActual, logFileName); // Esta función actualiza el log
+      seHizoTrabajoSignificativo = true;
+      archivosInfoParaZipActual = []; // Reiniciado por finalizarYGuardarZipActual (o debería)
+      tamañoZipActualBytes = 0;       // Reiniciado por finalizarYGuardarZipActual (o debería)
+      // El archivo actual (archivoInfo) se procesará para el *nuevo* ZIP.
+    }
+    
+    archivosInfoParaZipActual.push(archivoInfo);
+    tamañoZipActualBytes += archivoInfo.size; // Usar el tamaño original para la estimación del bloque
+    currentFileIndex++;
+    log.__progreso.archivosConvertidosABlob = currentFileIndex; // Indica cuántos archivos han sido "considerados" para blobs
+    seHizoTrabajoSignificativo = true; // Incluso si solo se añade a la lista
+  }
+
+  // Guardar estado intermedio de lo que se acumuló para el ZIP actual
+  log.__archivosInfoParaZipActual = archivosInfoParaZipActual;
+  log.__progreso.tamañoZipActualBytes = tamañoZipActualBytes;
+  log.__progreso.archivosEnZipActual = archivosInfoParaZipActual.length;
+
+
+  // Si el tiempo se agotó y hay archivos listos para un ZIP, o si todos los archivos fueron procesados y quedan items para el último ZIP
+  if (currentFileIndex >= log.__listaCompletaArchivos.length && archivosInfoParaZipActual.length > 0) {
+    Logger.log("COMPRESION: Todos los archivos procesados. Finalizando último ZIP part.");
+    finalizarYGuardarZipActual(log, archivosInfoParaZipActual, logFileName);
+    seHizoTrabajoSignificativo = true;
+    archivosInfoParaZipActual = []; // Asegurar que se limpia para la comprobación final
+    tamañoZipActualBytes = 0;
+  }
+  
+  guardarArchivoLogCompresion(log, logFileName); // Guardar el estado después de cada lote
+
+  if (currentFileIndex < log.__listaCompletaArchivos.length) {
+    log.__progreso.mensajeActual = `Lote de compresión procesado. ${currentFileIndex}/${log.__progreso.totalArchivosAComprimir} archivos considerados.`;
+    crearSiguienteTriggerCompresion('procesarLoteCompresion_triggered');
+    Logger.log(`COMPRESION: ${log.__progreso.mensajeActual}. Próximo trigger programado.`);
+  } else { // Todos los archivos han sido asignados a ZIPs
+    if (archivosInfoParaZipActual.length > 0) { // Debería haberse zippeado arriba, pero por si acaso.
+         Logger.log("COMPRESION: Quedaban archivos en el buffer final, intentando un último ZIP.");
+         finalizarYGuardarZipActual(log, archivosInfoParaZipActual, logFileName);
+    }
+    log.__estado_compresion = log.__errores.length > 0 ? "completado_con_errores" : "completado_ok";
+    log.__progreso.mensajeActual = `Compresión finalizada. ${log.__progreso.zipPartsCreados} ZIP(s) creados.`;
+    Logger.log(`COMPRESION: ${log.__progreso.mensajeActual}`);
+    guardarArchivoLogCompresion(log, logFileName);
+    limpiarPropiedadesCompresionBatch();
+    borrarTriggerCompresionActualPorNombre('procesarLoteCompresion_triggered');
+  }
+}
+
+/**
+ * Convierte los archivos acumulados en un ZIP y lo guarda.
+ * Actualiza el objeto 'log' directamente.
+ */
+function finalizarYGuardarZipActual(log, archivosInfoParaEsteZip, logFileName) {
+  if (!archivosInfoParaEsteZip || archivosInfoParaEsteZip.length === 0) {
+    Logger.log("COMPRESION: No hay archivos para crear el ZIP actual. Saltando.");
+    return;
+  }
+
+  const blobsParaZippear = [];
+  log.__progreso.mensajeActual = `Creando ZIP parte ${log.__progreso.zipPartsCreados + 1}... Convirtiendo ${archivosInfoParaEsteZip.length} archivos a blobs.`;
+  Logger.log(`COMPRESION: ${log.__progreso.mensajeActual}`);
+  guardarArchivoLogCompresion(log, logFileName); // Guardar estado antes de operación larga
+
+  for (const archivoInfo of archivosInfoParaEsteZip) {
+      try {
+        const file = DriveApp.getFileById(archivoInfo.id);
+        let blob;
+        let nombreFinalParaZip = archivoInfo.rutaRelativa; // Usar la ruta relativa completa como base
+
+        if (archivoInfo.esGDoc) {
+          const url = `https://www.googleapis.com/drive/v2/files/${archivoInfo.id}/export?mimeType=${encodeURIComponent(archivoInfo.mimeExportar)}`;
+          const token = ScriptApp.getOAuthToken();
+          const response = UrlFetchApp.fetch(url, {
+            headers: { Authorization: `Bearer ${token}` },
+            muteHttpExceptions: true
+          });
+
+          if (response.getResponseCode() === 200) {
+            blob = response.getBlob();
+            // CORRECCIÓN: Simplemente añadir la extensión de exportación a la ruta relativa original.
+            // Esto maneja correctamente nombres sin puntos.
+            // Ej: "ej1/Copia de Leeme" + ".docx" -> "ej1/Copia de Leeme.docx"
+            nombreFinalParaZip = archivoInfo.rutaRelativa + archivoInfo.extensionExportar;
+          } else {
+            const errorMsgGDoc = `Fallo exportación GDoc ${archivoInfo.rutaRelativa} (código ${response.getResponseCode()}): ${response.getContentText().substring(0,200)}`;
+            Logger.log(`COMPRESION: ${errorMsgGDoc}`);
+            log.__errores.push({timestamp: new Date().toISOString(), archivo: archivoInfo.rutaRelativa, mensaje: errorMsgGDoc});
+            // Crear un blob placeholder para no detener el ZIP por completo
+            blob = Utilities.newBlob(`Error al exportar: ${archivoInfo.nombre}`, MimeType.PLAIN_TEXT);
+            nombreFinalParaZip = archivoInfo.rutaRelativa + "_export_error.txt";
+            // Continuar para que el resto del ZIP se pueda crear si es posible
+          }
+        } else if (archivoInfo.mimeOriginal === MimeType.GOOGLE_FORMS) {
+          const formUrl = DriveApp.getFileById(archivoInfo.id).getUrl();
+          const accesoDirectoContent = `[InternetShortcut]\nURL=${formUrl}`;
+          blob = Utilities.newBlob(accesoDirectoContent, MimeType.PLAIN_TEXT);
+          // CORRECCIÓN: Simplemente añadir ".url" a la ruta relativa original
+          nombreFinalParaZip = archivoInfo.rutaRelativa + ".url";
+          log.__advertencias.push(`Formulario ${archivoInfo.rutaRelativa} incluido como acceso directo .url.`);
+        } else { // Archivos normales
+          blob = file.getBlob();
+          // nombreFinalParaZip ya es archivoInfo.rutaRelativa, no necesita cambio.
+        }
+        
+        blob.setName(nombreFinalParaZip); // Establecer el nombre final para la entrada del ZIP
+        blobsParaZippear.push(blob);
+
+      } catch (e) {
+        const errorMsg = `Error procesando archivo ${archivoInfo.rutaRelativa} para ZIP: ${e.message}`;
+        Logger.log(`COMPRESION: ${errorMsg}\n${e.stack}`);
+        log.__errores.push({timestamp: new Date().toISOString(), archivo: archivoInfo.rutaRelativa, mensaje: e.message});
+        // Opcional: añadir un blob placeholder para errores si se desea que el ZIP aún se cree con una nota de error.
+        // Por ejemplo:
+        const errorBlob = Utilities.newBlob(`Error al procesar: ${archivoInfo.nombre} - ${e.message}`, MimeType.PLAIN_TEXT);
+        errorBlob.setName(archivoInfo.rutaRelativa + "_processing_error.txt");
+        blobsParaZippear.push(errorBlob);
+      }
+  }
+  
+  if (blobsParaZippear.length > 0) {
+    try {
+      const nombreZip = `${log.__baseNombreZip}_part${log.__progreso.zipPartsCreados + 1}_of_${log.__progreso.zipPartsEstimados}.zip`;
+      log.__progreso.mensajeActual = `Comprimiendo ${blobsParaZippear.length} archivos en ${nombreZip}...`;
+      Logger.log(`COMPRESION: ${log.__progreso.mensajeActual}`);
+      guardarArchivoLogCompresion(log, logFileName);
+
+      const zipBlob = Utilities.zip(blobsParaZippear, nombreZip);
+      const carpetaZips = DriveApp.getFolderById(log.__idCarpetaZips);
+      const zipFile = carpetaZips.createFile(zipBlob);
+      
+      log.__zipsGenerados.push({
+        nombreZip: nombreZip,
+        url: zipFile.getUrl(),
+        archivosIncluidos: archivosInfoParaEsteZip.map(a => a.rutaRelativa),
+        tamañoBytes: zipBlob.getBytes().length
+      });
+      log.__progreso.zipPartsCreados++;
+      Logger.log(`COMPRESION: ZIP ${nombreZip} creado exitosamente (URL: ${zipFile.getUrl()}).`);
+    } catch (e) {
+        const errorMsg = `Error al crear el archivo ZIP part ${log.__progreso.zipPartsCreados + 1}: ${e.message}`;
+        Logger.log(`COMPRESION: ${errorMsg}`);
+        log.__errores.push({timestamp: new Date().toISOString(), archivo: "ZIP_CREATION", mensaje: errorMsg});
+    }
+  } else {
+      Logger.log("COMPRESION: No se generaron blobs válidos para el ZIP actual.");
+      log.__advertencias.push(`No se pudieron procesar archivos para el ZIP part ${log.__progreso.zipPartsCreados + 1}.`);
+  }
+
+  // Reiniciar para el próximo ZIP part
+  log.__archivosInfoParaZipActual = [];
+  log.__progreso.tamañoZipActualBytes = 0;
+  log.__progreso.archivosEnZipActual = 0;
+  // No guardar log aquí, se hace después de llamar a esta función.
+}
+
+/**
+ * Obtiene el estado actual del proceso de compresión.
+ * Callable desde el HTML.
+ */
+function obtenerEstadoCompresion() {
+  const userProps = PropertiesService.getUserProperties();
+  const batchActivo = userProps.getProperty(PS_KEYS_COMPRESS.BATCH_ACTIVE) === 'true';
+  const logFileName = userProps.getProperty(PS_KEYS_COMPRESS.LOG_FILENAME);
+
+  if (!batchActivo && !logFileName) {
+    return {
+      procesoCompresionActivo: false,
+      mensaje: "No hay ningún proceso de compresión activo o información reciente.",
+      progresoCompresion: null,
+      zipsGenerados: [],
+      urlLogCompresion: null,
+      urlCarpetaZips: null
+    };
+  }
+  
+  if (!logFileName) {
+      return { procesoCompresionActivo: batchActivo, mensaje: "Proceso de compresión activo pero sin archivo de log configurado.", progresoCompresion: null, zipsGenerados: [], urlLogCompresion: null, urlCarpetaZips: null};
+  }
+
+  try {
+    const log = cargarArchivoLogCompresion(logFileName);
+    if (log) {
+      const carpetaInformes = obtenerOCrearCarpeta(NOMBRE_CARPETA_INFORMES); // Para URL del log
+      const logFile = carpetaInformes.getFilesByName(logFileName).hasNext() ? carpetaInformes.getFilesByName(logFileName).next() : null;
+      const urlCarpetaZipsFinal = log.__idCarpetaZips ? DriveApp.getFolderById(log.__idCarpetaZips).getUrl() : null;
+
+      return {
+        procesoCompresionActivo: batchActivo,
+        mensaje: log.__progreso?.mensajeActual || (batchActivo ? "Consultando estado de compresión..." : "Compresión finalizada."),
+        progresoCompresion: log.__progreso,
+        estadoGeneralCompresion: log.__estado_compresion,
+        zipsGenerados: log.__zipsGenerados,
+        erroresCompresion: log.__errores,
+        advertenciasCompresion: log.__advertencias,
+        urlLogCompresion: logFile ? logFile.getUrl() : null,
+        urlCarpetaZips: urlCarpetaZipsFinal
+      };
+    } else {
+      return { 
+          procesoCompresionActivo: batchActivo, 
+          mensaje: "Error: No se pudo cargar el archivo de log de compresión.", 
+          progresoCompresion: null, 
+          zipsGenerados: [], 
+          urlLogCompresion: null,
+          urlCarpetaZips: null
+      };
+    }
+  } catch (e) {
+    Logger.log("Error en obtenerEstadoCompresion: " + e.stack);
+    return {
+      procesoCompresionActivo: batchActivo,
+      mensaje: "Error al obtener el estado de la compresión: " + e.message,
+      progresoCompresion: null,
+      zipsGenerados: [],
+      urlLogCompresion: null,
+      urlCarpetaZips: null
+    };
+  }
+}
+
+// --- Funciones de utilidad para compresión ---
+function limpiarPropiedadesCompresionBatch() {
+  const userProps = PropertiesService.getUserProperties();
+  userProps.deleteProperty(PS_KEYS_COMPRESS.BATCH_ACTIVE);
+  userProps.deleteProperty(PS_KEYS_COMPRESS.LOG_FILENAME);
+  userProps.deleteProperty(PS_KEYS_COMPRESS.TRIGGER_ID);
+  Logger.log("COMPRESION: Propiedades de usuario para compresión por lotes limpiadas.");
+}
+
+function crearSiguienteTriggerCompresion(nombreFuncionTrigger) {
+  borrarTriggerCompresionActualPorNombre(nombreFuncionTrigger); 
+  const trigger = ScriptApp.newTrigger(nombreFuncionTrigger)
+    .timeBased()
+    .after(TRIGGER_DELAY_MS) // Reutilizar constante o una específica para compresión
+    .create();
+  PropertiesService.getUserProperties().setProperty(PS_KEYS_COMPRESS.TRIGGER_ID, trigger.getUniqueId());
+  Logger.log(`COMPRESION: Trigger creado con ID: ${trigger.getUniqueId()} para ${nombreFuncionTrigger}.`);
+}
+
+function borrarTriggerCompresionActualPorNombre(nombreFuncionTrigger) {
+  const userProps = PropertiesService.getUserProperties();
+  const triggerIdActual = userProps.getProperty(PS_KEYS_COMPRESS.TRIGGER_ID);
+  const projectTriggers = ScriptApp.getProjectTriggers();
+  let borrado = false;
+
+  if (triggerIdActual) {
+    for (let i = 0; i < projectTriggers.length; i++) {
+      if (projectTriggers[i].getUniqueId() === triggerIdActual) {
+        ScriptApp.deleteTrigger(projectTriggers[i]);
+        Logger.log(`COMPRESION: Trigger ID ${triggerIdActual} borrado.`);
+        borrado = true;
+        break;
+      }
+    }
+  }
+  if (!borrado) {
+    for (let i = 0; i < projectTriggers.length; i++) {
+      if (projectTriggers[i].getHandlerFunction() === nombreFuncionTrigger) {
+        ScriptApp.deleteTrigger(projectTriggers[i]);
+        Logger.log(`COMPRESION: Trigger huérfano (por nombre ${nombreFuncionTrigger}) borrado.`);
+      }
+    }
+  }
+  userProps.deleteProperty(PS_KEYS_COMPRESS.TRIGGER_ID);
+}
+
+function guardarArchivoLogCompresion(logObject, nombreArchivoLog) {
+  try {
+    const jsonString = JSON.stringify(logObject, null, 2);
+    const carpetaInformes = obtenerOCrearCarpeta(NOMBRE_CARPETA_INFORMES);
+    
+    const files = carpetaInformes.getFilesByName(nombreArchivoLog);
+    let file;
+    if (files.hasNext()) {
+      file = files.next();
+      file.setContent(jsonString);
+    } else {
+      file = carpetaInformes.createFile(nombreArchivoLog, jsonString, MimeType.PLAIN_TEXT);
+    }
+    return file;
+  } catch (e) {
+    Logger.log(`Error al guardar log de compresión ${nombreArchivoLog}: ${e.message}`);
+    return null;
+  }
+}
+
+function cargarArchivoLogCompresion(nombreArchivoLog) {
+  try {
+    const carpetaInformes = obtenerOCrearCarpeta(NOMBRE_CARPETA_INFORMES);
+    const files = carpetaInformes.getFilesByName(nombreArchivoLog);
+    if (files.hasNext()) {
+      const file = files.next();
+      return JSON.parse(file.getBlob().getDataAsString());
+    }
+    Logger.log(`COMPRESION: Log ${nombreArchivoLog} no encontrado.`);
+    return null;
+  } catch (e) {
+    Logger.log(`Error al cargar log de compresión ${nombreArchivoLog}: ${e.message}`);
+    return null;
+  }
+}
+
+/**
+ * Modificación de obtenerTodosLosArchivosConRuta para compresión.
+ * La rutaRelativa es relativa a la carpeta 'folder' inicial.
+ */
+function obtenerTodosLosArchivosConRutaParaCompresion(folder, rutaBaseRelativa) {
+  let archivos = [];
+  // const nombreActualFolder = folder.getName(); // No necesitamos el nombre del folder actual en la ruta relativa si partimos de ""
+
+  const files = folder.getFiles();
+  while (files.hasNext()) {
+    const f = files.next();
+    const nombreArchivo = f.getName();
+    const mime = f.getMimeType();
+    let esGDoc = false;
+    let mimeExportar = null;
+    let extensionExportar = "";
+
+    if (mime === MimeType.GOOGLE_DOCS) {
+        esGDoc = true; mimeExportar = MimeType.MICROSOFT_WORD; extensionExportar = ".docx";
+    } else if (mime === MimeType.GOOGLE_SHEETS) {
+        esGDoc = true; mimeExportar = MimeType.MICROSOFT_EXCEL; extensionExportar = ".xlsx";
+    } else if (mime === MimeType.GOOGLE_SLIDES) {
+        esGDoc = true; mimeExportar = MimeType.MICROSOFT_POWERPOINT; extensionExportar = ".pptx";
+    }
+    // Google Forms se trata como un caso especial, no necesita exportación estándar aquí.
+    // Se gestionará en la parte de creación del blob para el ZIP.
+
+    archivos.push({ 
+        id: f.getId(), 
+        rutaRelativa: rutaBaseRelativa ? `${rutaBaseRelativa}/${nombreArchivo}` : nombreArchivo,
+        size: f.getSize(), // El tamaño de GDocs es 0, pero se usa para estimación de bloque. La exportación sí tiene tamaño.
+        nombre: nombreArchivo,
+        esGDoc: esGDoc,
+        mimeOriginal: mime,
+        mimeExportar: mimeExportar,
+        extensionExportar: extensionExportar
+    });
+  }
+
+  const subcarpetas = folder.getFolders();
+  while (subcarpetas.hasNext()) {
+    const sub = subcarpetas.next();
+    const nombreSubCarpeta = sub.getName();
+    const nuevaRutaBaseRelativa = rutaBaseRelativa ? `${rutaBaseRelativa}/${nombreSubCarpeta}` : nombreSubCarpeta;
+    archivos = archivos.concat(obtenerTodosLosArchivosConRutaParaCompresion(sub, nuevaRutaBaseRelativa));
+  }
+  return archivos;
+}
 
 /**
  * Calcula el número aproximado de ficheros zip a generar
@@ -1356,7 +1852,7 @@ function calcularEstimacionCompresion(nombreDestino) {
   const carpeta = carpetaDestino.next();
 
   const archivos = obtenerTodosLosArchivosConRuta(carpeta, "");
-  const BLOQUE_MB = 100;
+  const BLOQUE_MB = 256;
   const BLOQUE_BYTES = BLOQUE_MB * 1024 * 1024;
 
   let totalBytes = 0;
@@ -1373,4 +1869,5 @@ function calcularEstimacionCompresion(nombreDestino) {
     partes: numZips
   };
 }
+
 

@@ -137,13 +137,18 @@
       <div class="spinner" id="spinner"></div>
       <div id="resultado"></div>
       <div id="estadoProgreso" style="margin-top: 15px; padding: 10px; border-radius: 4px;"></div>
+      <div id="estadoCompresionProgreso" style="margin-top: 15px; padding: 10px; border-radius: 4px;"></div>
     </div>
 
 
     <script>
       const POLLING_INTERVAL_MS = 7000; // Consultar estado cada 7 segundos
+      
       let pollingIntervalId = null;
       let nombreDestinoGlobal = ""; // Para usar en funciones de comprimir, etc.
+      
+      let pollingIntervalCompresionId = null;
+      let nombreLogCompresionGlobal = null; // Para seguir el log de compresión
 
       function verificar() {
         const datos = {
@@ -279,152 +284,8 @@
           .obtenerEstadoCopia();
       }
 
-      function actualizarUIEstado(estado, nombreDestino) {
-        const estadoHtml = document.getElementById("estadoProgreso");
-        const resultadoHtml = document.getElementById("resultado");
-        let progresoMensaje = "";
 
-        // Guardar IDs actualizados que vienen del sondeo
-        if(estado.idDestino) idDestinoGlobal = estado.idDestino;
-        if(estado.urlRegistro) urlRegistroGlobal = estado.urlRegistro;
-
-        if (estado.procesoActivo) {
-          mostrarSpinner(true); 
-          deshabilitarBotones(true); 
-          if (estado.progreso) {
-            progresoMensaje = `<div>${estado.mensaje || "Procesando..."}</div>`;
-            if (estado.progreso.totalTareas > 0) {
-              const porcentaje = estado.progreso.totalTareas > 0 ?
-                                 Math.round((estado.progreso.tareasCompletadas / estado.progreso.totalTareas) * 100) : 0;
-              progresoMensaje += `
-                <div style="margin-top: 5px;">
-                  Tareas: ${estado.progreso.tareasCompletadas} de ${estado.progreso.totalTareas} (${porcentaje}%)
-                </div>
-                <div style="background-color: #e0e0e0; border-radius: 4px; padding: 2px; margin-top: 5px;">
-                  <div style="width: ${porcentaje}%; background-color: #4285F4; color: white; text-align: center; border-radius: 2px; padding: 1px 0;">
-                    ${porcentaje >= 5 ? porcentaje + '%' : ''}
-                  </div>
-                </div>
-              `;
-            }
-            if (estado.progreso.erroresEnLote > 0 || (estado.errores && estado.errores.length > 0)) {
-               progresoMensaje += `<div style="color: #c62828; margin-top: 5px;">Errores detectados durante el proceso.</div>`;
-            }
-          } else {
-            progresoMensaje = `<div>${estado.mensaje || "Esperando estado..."}</div>`;
-          }
-          estadoHtml.innerHTML = `<div class="mensaje-info">${progresoMensaje}</div>`;
-          resultadoHtml.innerHTML = ''; 
-
-        } else { // Proceso NO activo
-          mostrarSpinner(false); 
-          clearInterval(pollingIntervalId);
-          pollingIntervalId = null;
-          
-          estadoHtml.innerHTML = ""; 
-
-          let mensajeFinal = "";
-          let claseFinal = "mensaje-info"; 
-
-          if (estado.estadoGeneral === "completado_ok") {
-              mensajeFinal = estado.mensaje || "✅ Proceso completado exitosamente.";
-              claseFinal = "mensaje-ok";
-          } else if (estado.estadoGeneral === "completado_con_errores") {
-              mensajeFinal = estado.mensaje || "🟡 Proceso completado con errores.";
-              claseFinal = "mensaje-aviso";
-          } else if (estado.estadoGeneral === "error_critico") {
-              mensajeFinal = estado.mensaje || "❌ Error crítico durante el proceso.";
-              claseFinal = "mensaje-error";
-          } else {
-              mensajeFinal = estado.mensaje || "El estado del proceso no es concluyente o no hay información reciente.";
-              if (mensajeFinal.includes("Error") || mensajeFinal.includes("fallo")) claseFinal = "mensaje-error";
-              else if (mensajeFinal.includes("No hay ningún proceso")) claseFinal = "mensaje-info"; 
-              else claseFinal = "mensaje-aviso";
-          }
-          
-          resultadoHtml.innerHTML = `<div class="${claseFinal}">${mensajeFinal}</div>`;
-          
-          if (urlRegistroGlobal && (estado.estadoGeneral === "completado_ok" || estado.estadoGeneral === "completado_con_errores")) {
-             agregarBotonesPostProceso(idDestinoGlobal, urlRegistroGlobal, nombreDestino, estado.estadoGeneral === "completado_ok");
-          }
-          deshabilitarBotones(false); 
-          // console.log("Sondeo detenido. Proceso finalizado o ya no activo."); 
-        }
-      }
-
-
-      function actualizarUIEstado_old(estado, nombreDestino) {
-        const estadoHtml = document.getElementById("estadoProgreso");
-        const resultadoHtml = document.getElementById("resultado");
-        let progresoMensaje = "";
-
-        if (estado.procesoActivo) {
-          deshabilitarBotones(true); // Asegurar que sigan deshabilitados
-          if (estado.progreso) {
-            progresoMensaje = `<div>${estado.mensaje || "Procesando..."}</div>`;
-            if (estado.progreso.totalTareas > 0) {
-              const porcentaje = estado.progreso.totalTareas > 0 ?
-                                 Math.round((estado.progreso.tareasCompletadas / estado.progreso.totalTareas) * 100) : 0;
-              progresoMensaje += `
-                <div style="margin-top: 5px;">
-                  Tareas: ${estado.progreso.tareasCompletadas} de ${estado.progreso.totalTareas} (${porcentaje}%)
-                </div>
-                <div style="background-color: #e0e0e0; border-radius: 4px; padding: 2px; margin-top: 5px;">
-                  <div style="width: ${porcentaje}%; background-color: #4285F4; color: white; text-align: center; border-radius: 2px; padding: 1px 0;">
-                    ${porcentaje >= 5 ? porcentaje + '%' : ''}
-                  </div>
-                </div>
-              `;
-            }
-            if (estado.progreso.erroresEnLote > 0 || (estado.errores && estado.errores.length > 0)) {
-               progresoMensaje += `<div style="color: #c62828; margin-top: 5px;">Errores detectados durante el proceso.</div>`;
-            }
-          } else {
-            progresoMensaje = `<div>${estado.mensaje || "Esperando estado..."}</div>`;
-          }
-          estadoHtml.innerHTML = `<div class="mensaje-info">${progresoMensaje}</div>`;
-          resultadoHtml.innerHTML = ''; // Limpiar el div de resultado mientras el progreso está activo
-
-        } else { // Proceso NO activo
-          clearInterval(pollingIntervalId);
-          pollingIntervalId = null;
-          deshabilitarBotones(false); // Habilitar todos los botones
-          
-          estadoHtml.innerHTML = ""; // Limpiar el área de progreso
-
-          let mensajeFinal = "";
-          let claseFinal = "mensaje-info"; // Clase por defecto
-
-          if (estado.estadoGeneral === "completado_ok") {
-              mensajeFinal = estado.mensaje || "✅ Proceso completado exitosamente.";
-              claseFinal = "mensaje-ok";
-          } else if (estado.estadoGeneral === "completado_con_errores") {
-              mensajeFinal = estado.mensaje || "🟡 Proceso completado con errores.";
-              claseFinal = "mensaje-aviso";
-          } else if (estado.estadoGeneral === "error_critico") {
-              mensajeFinal = estado.mensaje || "❌ Error crítico durante el proceso.";
-              claseFinal = "mensaje-error";
-          } else {
-              // Si estadoGeneral no es uno de los anteriores, pero el proceso no está activo,
-              // podría ser el mensaje genérico de "No hay proceso" o un estado intermedio no capturado.
-              mensajeFinal = estado.mensaje || "El estado del proceso no es concluyente o no hay información reciente.";
-              // Mantener como mensaje-info o cambiar a aviso si el mensaje sugiere un problema.
-              if (mensajeFinal.includes("Error") || mensajeFinal.includes("fallo")) claseFinal = "mensaje-error";
-              else if (mensajeFinal.includes("No hay ningún proceso")) claseFinal = "mensaje-info"; // Para el estado inicial
-              else claseFinal = "mensaje-aviso";
-          }
-          
-          resultadoHtml.innerHTML = `<div class="${claseFinal}">${mensajeFinal}</div>`;
-          
-          // Solo añadir botones de post-proceso si tenemos URL de registro (indica que un log se generó)
-          // y el estado es alguno de los de "completado".
-          if (estado.urlRegistro && (estado.estadoGeneral === "completado_ok" || estado.estadoGeneral === "completado_con_errores")) {
-             agregarBotonesPostProceso(estado.idDestino, estado.urlRegistro, nombreDestino, estado.estadoGeneral === "completado_ok");
-          }
-          // console.log("Sondeo detenido. Proceso finalizado o ya no activo."); // Reemplazo de Logger.log
-        }
-      }
-      
+     
       // Modificado para aceptar un flag 'exitoso' para el botón de comprimir
       function agregarBotonesPostProceso(idDestino, urlRegistro, nombreDestino, exitoso) {
           const resultadoDiv = document.getElementById("resultado");
@@ -493,49 +354,6 @@
         }
       }
 
-      function verificar_old() {
-        const datos = {
-          idCarpeta: document.getElementById("idCarpeta").value.trim(),
-          nombreDestino: document.getElementById("nombreDestino").value.trim() || nombreDestinoGlobal
-        };
-        nombreDestinoGlobal = datos.nombreDestino;
-
-        if (!datos.idCarpeta || !datos.nombreDestino) {
-          mostrarResultado("<div class='mensaje-error'>Introduce el ID de carpeta y nombre destino para verificar.</div>");
-          return;
-        }
-
-        mostrarSpinner(true);
-        deshabilitarBotones(true);
-        document.getElementById("estadoProgreso").innerHTML = "";
-        mostrarResultado("🔎 Verificando integridad...");
-
-        google.script.run
-          .withSuccessHandler(function (res) {
-            mostrarSpinner(false);
-            // NO deshabilitar botones aquí todavía, se hará al final de agregarBotonesPostProceso si es necesario
-            // o se habilitarán si no hay más acciones.
-
-            let claseResultado = res.includes("✅") ? "mensaje-ok" :
-                                 res.includes("❌") ? "mensaje-error" :
-                                 "mensaje-aviso";
-            let htmlRes = `<div class="${claseResultado}">${res}</div>`;
-            mostrarResultado(htmlRes);
-
-            if (res.includes("✅ Todo coincide")) { 
-              agregarBotonesPostProceso(null, null, datos.nombreDestino, true); // ID y URL de log no son cruciales para solo comprimir
-            } else {
-              deshabilitarBotones(false); // Si no coincide, habilitar botones para que el usuario pueda re-copiar o limpiar
-            }
-          })
-          .withFailureHandler(function(err){
-            mostrarSpinner(false);
-            deshabilitarBotones(false);
-            mostrarResultado(`<div class="mensaje-error">Error al verificar: ${err.message}</div>`);
-          })
-          .verificarIntegridad(datos);
-      }
-
       function limpiar() {
         const datos = {
           idCarpeta: document.getElementById("idCarpeta").value.trim(),
@@ -574,47 +392,252 @@
           .limpiarDestino(datos);
       }
 
-      function comprimir(nombreDestino) { 
-        const dest = nombreDestino || nombreDestinoGlobal;
-        if (!dest) {
-          mostrarResultado("<div class='mensaje-error'>Falta el nombre de la carpeta destino para comprimir.</div>");
-          return;
-        }
+      function actualizarUIEstado(estado, nombreDestino) { 
+          const estadoHtml = document.getElementById("estadoProgreso");
+          const resultadoHtml = document.getElementById("resultado");
+          let progresoMensaje = "";
 
-        mostrarSpinner(true);
-        deshabilitarBotones(true); // Deshabilitar botones durante la compresión
-        document.getElementById("estadoProgreso").innerHTML = "";
-        mostrarResultado("🗜️ Comprimiendo carpeta...");
-        
-        google.script.run
-            .withSuccessHandler(function (resZip) {
-              mostrarSpinner(false);
-              deshabilitarBotones(false); 
-              const claseResultado = resZip.mensaje.includes("✅") ? "mensaje-ok" :
-                                    resZip.mensaje.includes("❌") ? "mensaje-error" : "mensaje-aviso";
-              
-              let html = `<div class="${claseResultado}">${resZip.mensaje}</div>`;
+          // Guardar IDs actualizados que vienen del sondeo
+          if(estado.idDestino) idDestinoGlobal = estado.idDestino;
+          if(estado.urlRegistro) urlRegistroGlobal = estado.urlRegistro;
 
-              if (resZip.zips?.length > 0) {
-                html += `
-                  <div style="text-align: center; margin-top: 20px;">
-                    <button onclick="window.open('${resZip.carpetaZipsUrl}', '_blank')" style="margin-top:10px">
-                      Abrir carpeta con ZIPs
-                    </button><br><br>
-                    <button onclick="window.open('${resZip.urlLog}', '_blank')" style="margin-top:5px">
-                      Ver log de compresión
-                    </button>
+          if (estado.procesoActivo) {
+            mostrarSpinner(true); 
+            deshabilitarBotones(true); 
+            // Asegurar que los botones de compresión también estén deshabilitados si el proceso de copia está activo
+            const botonComprimir = document.querySelector("button[onclick^='comprimir(']");
+            if (botonComprimir) botonComprimir.disabled = true;
+
+            if (estado.progreso) {
+              progresoMensaje = `<div>${estado.mensaje || "Procesando copia..."}</div>`;
+              if (estado.progreso.totalTareas > 0) {
+                const porcentaje = estado.progreso.totalTareas > 0 ?
+                                    Math.round((estado.progreso.tareasCompletadas / estado.progreso.totalTareas) * 100) : 0;
+                progresoMensaje += `
+                  <div style="margin-top: 5px;">
+                    Tareas de copia: ${estado.progreso.tareasCompletadas} de ${estado.progreso.totalTareas} (${porcentaje}%)
+                  </div>
+                  <div style="background-color: #e0e0e0; border-radius: 4px; padding: 2px; margin-top: 5px;">
+                    <div style="width: ${porcentaje}%; background-color: #4285F4; color: white; text-align: center; border-radius: 2px; padding: 1px 0;">
+                      ${porcentaje >= 5 ? porcentaje + '%' : ''}
+                    </div>
                   </div>
                 `;
               }
-              mostrarResultado(html);
-            })
-            .withFailureHandler(function(err){
+              if (estado.progreso.erroresEnLote > 0 || (estado.errores && estado.errores.length > 0)) {
+                  progresoMensaje += `<div style="color: #c62828; margin-top: 5px;">Errores detectados durante la copia.</div>`;
+              }
+            } else {
+              progresoMensaje = `<div>${estado.mensaje || "Esperando estado de copia..."}</div>`;
+            }
+            estadoHtml.innerHTML = `<div class="mensaje-info">${progresoMensaje}</div>`;
+            document.getElementById("estadoCompresionProgreso").innerHTML = ""; // Limpiar estado de compresión si la copia está activa
+            resultadoHtml.innerHTML = ''; 
+
+          } else { // Proceso de copia NO activo
+            if (!pollingIntervalCompresionId) { // Solo detener spinner y habilitar botones si la compresión TAMPOCO está activa
                 mostrarSpinner(false);
-                deshabilitarBotones(false);
-                mostrarResultado(`<div class="mensaje-error">Error al comprimir: ${err.message}</div>`);
+                deshabilitarBotones(false); 
+            }
+            clearInterval(pollingIntervalId);
+            pollingIntervalId = null;
+            
+            estadoHtml.innerHTML = ""; 
+
+            let mensajeFinal = "";
+            let claseFinal = "mensaje-info"; 
+
+            if (estado.estadoGeneral === "completado_ok") {
+                mensajeFinal = estado.mensaje || "✅ Proceso de copia completado exitosamente.";
+                claseFinal = "mensaje-ok";
+            } else if (estado.estadoGeneral === "completado_con_errores") {
+                mensajeFinal = estado.mensaje || "🟡 Proceso de copia completado con errores.";
+                claseFinal = "mensaje-aviso";
+            } else if (estado.estadoGeneral === "error_critico") {
+                mensajeFinal = estado.mensaje || "❌ Error crítico durante el proceso de copia.";
+                claseFinal = "mensaje-error";
+            } else {
+                mensajeFinal = estado.mensaje || "El estado del proceso de copia no es concluyente o no hay información reciente.";
+                if (mensajeFinal.includes("Error") || mensajeFinal.includes("fallo")) claseFinal = "mensaje-error";
+                else if (mensajeFinal.includes("No hay ningún proceso")) claseFinal = "mensaje-info"; 
+                else claseFinal = "mensaje-aviso";
+            }
+            
+            // Solo actualizar #resultado si no hay un proceso de compresión mostrando su propio resultado final.
+            if (!document.getElementById("estadoCompresionProgreso").innerHTML.includes("mensaje-")) {
+              resultadoHtml.innerHTML = `<div class="${claseFinal}">${mensajeFinal}</div>`;
+            }
+            
+            if (urlRegistroGlobal && (estado.estadoGeneral === "completado_ok" || estado.estadoGeneral === "completado_con_errores")) {
+                agregarBotonesPostProceso(idDestinoGlobal, urlRegistroGlobal, nombreDestino || nombreDestinoGlobal, estado.estadoGeneral === "completado_ok");
+            }
+            if (!pollingIntervalCompresionId) { // Solo habilitar si la compresión no está activa
+                deshabilitarBotones(false); 
+            }
+          }
+      }
+
+      function comprimir(nombreDestino) { 
+          const dest = nombreDestino || nombreDestinoGlobal;
+          if (!dest) {
+            mostrarResultado("<div class='mensaje-error'>Falta el nombre de la carpeta destino para comprimir.</div>");
+            return;
+          }
+
+          mostrarSpinner(true);
+          deshabilitarBotones(true); 
+          document.getElementById("estadoProgreso").innerHTML = ""; // Limpiar estado de copia
+          document.getElementById("estadoCompresionProgreso").innerHTML = `<div class="mensaje-info">🚀 Iniciando compresión para "${dest}"...</div>`;
+          mostrarResultado(""); // Limpiar resultado principal
+
+          google.script.run
+              .withSuccessHandler(function (resInicioCompresion) {
+                // No ocultar spinner aquí, el sondeo lo manejará
+                if (resInicioCompresion.compresionPorLotesIniciada) {
+                  nombreLogCompresionGlobal = resInicioCompresion.logFileName; // Guardar para sondeo
+                  document.getElementById("estadoCompresionProgreso").innerHTML = `<div class="mensaje-info">${resInicioCompresion.mensaje}</div>`;
+                  iniciarSondeoEstadoCompresion(dest);
+                } else {
+                  mostrarSpinner(false);
+                  deshabilitarBotones(false);
+                  document.getElementById("estadoCompresionProgreso").innerHTML = "";
+                  mostrarResultado(`<div class="mensaje-error">${resInicioCompresion.mensaje || "No se pudo iniciar la compresión."}</div>`);
+                }
+              })
+              .withFailureHandler(function(err){
+                  mostrarSpinner(false);
+                  deshabilitarBotones(false);
+                  document.getElementById("estadoCompresionProgreso").innerHTML = "";
+                  mostrarResultado(`<div class="mensaje-error">Error al iniciar compresión: ${err.message}</div>`);
+              })
+              .iniciarCompresionPorLotes(dest);
+      }
+
+      function iniciarSondeoEstadoCompresion(nombreDestino) {
+          if (pollingIntervalCompresionId) {
+            clearInterval(pollingIntervalCompresionId);
+          }
+          deshabilitarBotones(true); // Asegurar que estén deshabilitados
+          consultarEstadoCompresion(nombreDestino); // Llamada inmediata
+          pollingIntervalCompresionId = setInterval(function() { consultarEstadoCompresion(nombreDestino); }, POLLING_INTERVAL_MS);
+      }
+
+      function consultarEstadoCompresion(nombreDestino) {
+          google.script.run
+            .withSuccessHandler(function(estado) {
+              actualizarUIEstadoCompresion(estado, nombreDestino);
             })
-            .comprimirCarpetaDestino(dest);
+            .withFailureHandler(function(err) {
+              const estadoHtmlComp = document.getElementById("estadoCompresionProgreso");
+              if (estadoHtmlComp.innerHTML.includes("mensaje-info")) {
+                  estadoHtmlComp.innerHTML += `<div class="mensaje-aviso" style="font-size:0.8em; opacity:0.7;">(Fallo temporal al actualizar estado de compresión)</div>`;
+              }
+              console.warn("Fallo temporal al consultar estado de compresión:", err);
+            })
+            .obtenerEstadoCompresion(); // No necesita 'nombreDestino' si el log se gestiona por Properties
+      }
+
+      function actualizarUIEstadoCompresion(estado, nombreDestinoOriginal) {
+          const estadoHtmlComp = document.getElementById("estadoCompresionProgreso");
+          const resultadoHtml = document.getElementById("resultado"); // Para mensajes finales
+          let progresoMensaje = "";
+
+          if (estado.procesoCompresionActivo) {
+            mostrarSpinner(true);
+            deshabilitarBotones(true);
+            if (estado.progresoCompresion) {
+              progresoMensaje = `<div>${estado.mensaje || "Comprimiendo..."}</div>`;
+              const prog = estado.progresoCompresion;
+              if (prog.totalArchivosAComprimir > 0) {
+                const porcentajeArchivos = prog.totalArchivosAComprimir > 0 ?
+                                  Math.round((prog.archivosConvertidosABlob / prog.totalArchivosAComprimir) * 100) : 0;
+                progresoMensaje += `
+                  <div style="margin-top: 5px;">
+                    Archivos preparados: ${prog.archivosConvertidosABlob} de ${prog.totalArchivosAComprimir} (${porcentajeArchivos}%)
+                  </div>
+                  <div style="background-color: #e0e0e0; border-radius: 4px; padding: 2px; margin-top: 2px;">
+                    <div style="width: ${porcentajeArchivos}%; background-color: #6d4c41; color: white; text-align: center; border-radius: 2px; padding: 1px 0;">
+                      ${porcentajeArchivos >= 5 ? porcentajeArchivos + '%' : ''}
+                    </div>
+                  </div>`;
+              }
+              progresoMensaje += `<div style="font-size:0.9em; margin-top:3px;">ZIP actual: Parte ${prog.zipPartsCreados + 1} de ${prog.zipPartsEstimados || '?'}. Archivos en ZIP actual: ${prog.archivosEnZipActual || 0}.</div>`;
+
+              if (estado.erroresCompresion && estado.erroresCompresion.length > 0) {
+                progresoMensaje += `<div style="color: #c62828; margin-top: 5px;">Errores durante la compresión.</div>`;
+              }
+            } else {
+              progresoMensaje = `<div>${estado.mensaje || "Esperando estado de compresión..."}</div>`;
+            }
+            estadoHtmlComp.innerHTML = `<div class="mensaje-info">${progresoMensaje}</div>`;
+            resultadoHtml.innerHTML = ''; // Limpiar resultado principal mientras la compresión está activa
+
+          } else { // Proceso de compresión NO activo
+            mostrarSpinner(false); // Ocultar spinner si la copia tampoco está activa
+            if (!pollingIntervalId) deshabilitarBotones(false); // Habilitar si la copia no está corriendo
+
+            clearInterval(pollingIntervalCompresionId);
+            pollingIntervalCompresionId = null;
+            
+            estadoHtmlComp.innerHTML = ""; // Limpiar el área de progreso de compresión
+
+            let mensajeFinal = "";
+            let claseFinal = "mensaje-info";
+
+            if (estado.estadoGeneralCompresion === "completado_ok") {
+                mensajeFinal = estado.mensaje || "✅ Compresión completada exitosamente.";
+                claseFinal = "mensaje-ok";
+            } else if (estado.estadoGeneralCompresion === "completado_con_errores") {
+                mensajeFinal = estado.mensaje || "🟡 Compresión completada con errores o advertencias.";
+                claseFinal = "mensaje-aviso";
+            } else if (estado.estadoGeneralCompresion === "error_critico") {
+                mensajeFinal = estado.mensaje || "❌ Error crítico durante la compresión.";
+                claseFinal = "mensaje-error";
+            } else {
+                mensajeFinal = estado.mensaje || "El estado de la compresión no es concluyente.";
+                if (mensajeFinal.includes("Error") || mensajeFinal.includes("fallo")) claseFinal = "mensaje-error";
+                else claseFinal = "mensaje-info";
+            }
+            
+            let htmlResFinal = `<div class="${claseFinal}">${mensajeFinal}</div>`;
+
+            if (estado.zipsGenerados && estado.zipsGenerados.length > 0 && estado.urlCarpetaZips) {
+              htmlResFinal += `
+                <div style="text-align: center; margin-top: 15px; margin-bottom:10px;">
+                  <button onclick="window.open('${estado.urlCarpetaZips}', '_blank')" style="margin-top:5px; background-color:#388e3c;">
+                    🗂️ Abrir carpeta con ZIPs
+                  </button>
+                </div>`;
+            }
+            if (estado.urlLogCompresion) {
+              htmlResFinal += `
+                <div style="text-align: center; margin-bottom:15px;">
+                  <button onclick="window.open('${estado.urlLogCompresion}', '_blank')" style="margin-top:5px; font-size:0.9em; padding: 8px;">
+                    Ver log de compresión
+                  </button>
+                </div>`;
+            }
+            if (estado.advertenciasCompresion && estado.advertenciasCompresion.length > 0) {
+              htmlResFinal += `<div class="mensaje-aviso" style="font-size:0.85em; margin-top:10px;"><strong>Advertencias:</strong><br>${estado.advertenciasCompresion.join('<br>')}</div>`;
+            }
+            if (estado.erroresCompresion && estado.erroresCompresion.length > 0) {
+              htmlResFinal += `<div class="mensaje-error" style="font-size:0.85em; margin-top:10px;"><strong>Errores Detallados:</strong><br>${estado.erroresCompresion.map(e => `Archivo: ${e.archivo} - ${e.mensaje}`).join('<br>')}</div>`;
+            }
+
+            resultadoHtml.innerHTML = htmlResFinal; // Mostrar resultado final de la compresión
+            // Re-habilitar botones si el proceso de copia no está activo
+            if (!pollingIntervalId) {
+                deshabilitarBotones(false);
+            }
+          }
+      }
+
+      window.onload = function() {
+          mostrarSpinner(false);
+          deshabilitarBotones(false);
+          // Podrías incluso llamar a obtenerEstadoCopia y obtenerEstadoCompresion
+          // para reanudar la visualización si se recarga la página y un proceso estaba activo.
+          // Por simplicidad, no lo añado ahora, pero es una mejora posible.
       }
 
     </script>
